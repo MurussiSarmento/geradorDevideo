@@ -209,38 +209,53 @@ class ThreadPoolManager:
             callback: Função de callback para notificação de conclusão
         """
         def worker():
+            thread_name = threading.current_thread().name
+            print(f"🚀 [ThreadPool] Thread {thread_name} iniciada para prompt {prompt_item.id}")
+            
             try:
                 # Aguardar semáforo (slot de thread disponível)
+                print(f"⏳ [ThreadPool] Thread {thread_name} aguardando slot...")
                 self.thread_semaphore.acquire()
+                print(f"✅ [ThreadPool] Thread {thread_name} obteve slot")
                 
                 if self._stop_event.is_set():
+                    print(f"🛑 [ThreadPool] Thread {thread_name} cancelada (stop event)")
                     return
                 
                 # Registrar thread ativa
                 with self._lock:
                     self.active_threads[prompt_item.id] = threading.current_thread()
+                    active_count = len(self.active_threads)
+                
+                print(f"📊 [ThreadPool] Thread {thread_name} registrada ({active_count} ativas)")
                 
                 # Processar prompt
+                print(f"🎬 [ThreadPool] Thread {thread_name} processando prompt {prompt_item.id}")
                 result = process_function(prompt_item)
                 
                 # Chamar callback se fornecido
                 if callback:
+                    print(f"📞 [ThreadPool] Thread {thread_name} chamando callback")
                     callback(prompt_item.id, result)
                     
             except Exception as e:
+                print(f"❌ [ThreadPool] Erro na thread {thread_name}: {str(e)}")
                 if callback:
-                    callback(prompt_item.id, {'error': str(e)})
+                    callback(prompt_item.id, {'success': False, 'error': str(e), 'processing_time': 0})
             finally:
                 # Limpar thread ativa
                 with self._lock:
                     self.active_threads.pop(prompt_item.id, None)
+                    remaining_count = len(self.active_threads)
                 
                 # Liberar semáforo
                 self.thread_semaphore.release()
+                print(f"🏁 [ThreadPool] Thread {thread_name} finalizada ({remaining_count} restantes)")
         
         # Iniciar thread
-        thread = threading.Thread(target=worker, daemon=True)
+        thread = threading.Thread(target=worker, daemon=True, name=f"Worker-{prompt_item.id[:8]}")
         thread.start()
+        print(f"🎯 [ThreadPool] Thread {thread.name} submetida para prompt {prompt_item.id}")
     
     def update_max_threads(self, new_max: int) -> None:
         """
@@ -250,31 +265,68 @@ class ThreadPoolManager:
             new_max: Novo número máximo de threads
         """
         if 1 <= new_max <= 10:
-            self.max_threads = new_max
-            # Criar novo semáforo com novo limite
-            current_value = self.thread_semaphore._value
-            self.thread_semaphore = threading.Semaphore(new_max)
-            # Ajustar valor atual se necessário
-            if current_value > new_max:
-                for _ in range(current_value - new_max):
-                    self.thread_semaphore.acquire()
+            with self._lock:
+                old_max = self.max_threads
+                self.max_threads = new_max
+                
+                # Calcular quantas threads estão realmente ativas
+                active_count = len(self.active_threads)
+                
+                # Se aumentando o limite, liberar slots adicionais
+                if new_max > old_max:
+                    for _ in range(new_max - old_max):
+                        self.thread_semaphore.release()
+                
+                # Se diminuindo o limite, adquirir slots extras (sem bloquear)
+                elif new_max < old_max:
+                    slots_to_remove = old_max - new_max
+                    for _ in range(slots_to_remove):
+                        # Tentar adquirir sem bloquear
+                        if self.thread_semaphore.acquire(blocking=False):
+                            continue
+                        else:
+                            # Se não conseguir, significa que há threads ativas
+                            # Deixar que terminem naturalmente
+                            break
     
     def get_active_count(self) -> int:
         """Retorna número de threads ativas"""
         with self._lock:
-            return len(self.active_threads)
+            count = len(self.active_threads)
+            if count > 0:
+                thread_names = [t.name for t in self.active_threads.values()]
+                print(f"📊 [ThreadPool] {count} threads ativas: {thread_names}")
+            return count
     
     def stop_all_threads(self) -> None:
         """Para todas as threads"""
+        print(f"🛑 [ThreadPool] Parando todas as threads...")
         self._stop_event.set()
         
         # Aguardar threads terminarem
         with self._lock:
             threads = list(self.active_threads.values())
+            active_count = len(threads)
         
-        for thread in threads:
+        print(f"🔄 [ThreadPool] Aguardando {active_count} threads terminarem...")
+        
+        for i, thread in enumerate(threads, 1):
             if thread.is_alive():
+                print(f"⏳ [ThreadPool] Aguardando thread {i}/{active_count}: {thread.name}")
                 thread.join(timeout=5)
+                if thread.is_alive():
+                    print(f"⚠️ [ThreadPool] Thread {thread.name} não terminou no tempo esperado")
+                else:
+                    print(f"✅ [ThreadPool] Thread {thread.name} finalizada")
+        
+        # Limpar threads ativas
+        with self._lock:
+            remaining = len(self.active_threads)
+            self.active_threads.clear()
+            if remaining > 0:
+                print(f"🧹 [ThreadPool] Limpando {remaining} threads restantes")
+        
+        print(f"✅ [ThreadPool] Todas as threads foram paradas")
     
     def resume_threads(self) -> None:
         """Retoma processamento de threads"""
@@ -289,7 +341,7 @@ class ProgressTracker:
         self.completed_prompts = 0
         self.failed_prompts = 0
         self.start_time: Optional[datetime] = None
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self.processing_times: List[float] = []
     
     def start_tracking(self, total_prompts: int) -> None:
@@ -300,7 +352,14 @@ class ProgressTracker:
             self.failed_prompts = 0
             self.start_time = datetime.now()
             self.processing_times.clear()
-    
+
+    # Novo: permite incrementar o total quando prompts são adicionados durante o processamento
+    def add_to_total(self, count: int) -> None:
+        if count <= 0:
+            return
+        with self._lock:
+            self.total_prompts += count
+
     def update_progress(self, prompt_id: str, status: PromptStatus, 
                        processing_time: Optional[float] = None) -> None:
         """
