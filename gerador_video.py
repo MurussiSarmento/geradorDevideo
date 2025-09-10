@@ -33,34 +33,39 @@ class VideoGeneratorApp:
         self.api_key_entry = ttk.Entry(main_frame, width=50, show="*")
         self.api_key_entry.grid(row=0, column=1, columnspan=2, sticky=(tk.W, tk.E), pady=5)
         
+        # Token
+        ttk.Label(main_frame, text="Token:").grid(row=1, column=0, sticky=tk.W, pady=5)
+        self.token_entry = ttk.Entry(main_frame, width=50, show="*")
+        self.token_entry.grid(row=1, column=1, columnspan=2, sticky=(tk.W, tk.E), pady=5)
+        
         # Prompt
-        ttk.Label(main_frame, text="Prompt:").grid(row=1, column=0, sticky=(tk.W, tk.N), pady=5)
+        ttk.Label(main_frame, text="Prompt:").grid(row=2, column=0, sticky=(tk.W, tk.N), pady=5)
         self.prompt_text = scrolledtext.ScrolledText(main_frame, width=50, height=8)
-        self.prompt_text.grid(row=1, column=1, columnspan=2, sticky=(tk.W, tk.E), pady=5)
+        self.prompt_text.grid(row=2, column=1, columnspan=2, sticky=(tk.W, tk.E), pady=5)
         
         # Idioma
-        ttk.Label(main_frame, text="Idioma:").grid(row=2, column=0, sticky=tk.W, pady=5)
+        ttk.Label(main_frame, text="Idioma:").grid(row=3, column=0, sticky=tk.W, pady=5)
         self.language_var = tk.StringVar(value="pt")
         language_combo = ttk.Combobox(main_frame, textvariable=self.language_var, 
                                     values=["pt", "en", "es", "fr", "de", "it"], state="readonly")
-        language_combo.grid(row=2, column=1, sticky=tk.W, pady=5)
+        language_combo.grid(row=3, column=1, sticky=tk.W, pady=5)
         
         # Botão Gerar
         self.generate_button = ttk.Button(main_frame, text="Gerar Vídeo", command=self.generate_video)
-        self.generate_button.grid(row=3, column=0, columnspan=3, pady=20)
+        self.generate_button.grid(row=4, column=0, columnspan=3, pady=20)
         
         # Status
-        ttk.Label(main_frame, text="Status:").grid(row=4, column=0, sticky=tk.W, pady=5)
+        ttk.Label(main_frame, text="Status:").grid(row=5, column=0, sticky=tk.W, pady=5)
         self.status_label = ttk.Label(main_frame, text="Pronto para gerar vídeo", foreground="green")
-        self.status_label.grid(row=4, column=1, columnspan=2, sticky=tk.W, pady=5)
+        self.status_label.grid(row=5, column=1, columnspan=2, sticky=tk.W, pady=5)
         
         # Progress bar
         self.progress = ttk.Progressbar(main_frame, mode='indeterminate')
-        self.progress.grid(row=5, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=10)
+        self.progress.grid(row=6, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=10)
         
         # Frame para botões do vídeo
         video_frame = ttk.Frame(main_frame)
-        video_frame.grid(row=6, column=0, columnspan=3, pady=10)
+        video_frame.grid(row=7, column=0, columnspan=3, pady=10)
         
         self.open_button = ttk.Button(video_frame, text="Abrir no Navegador", 
                                     command=self.open_in_browser, state="disabled")
@@ -71,13 +76,13 @@ class VideoGeneratorApp:
         self.download_button.grid(row=0, column=1, padx=5)
         
         # URL do vídeo
-        ttk.Label(main_frame, text="URL do Vídeo:").grid(row=7, column=0, sticky=tk.W, pady=5)
+        ttk.Label(main_frame, text="URL do Vídeo:").grid(row=8, column=0, sticky=tk.W, pady=5)
         self.url_text = scrolledtext.ScrolledText(main_frame, width=50, height=3)
-        self.url_text.grid(row=7, column=1, columnspan=2, sticky=(tk.W, tk.E), pady=5)
+        self.url_text.grid(row=8, column=1, columnspan=2, sticky=(tk.W, tk.E), pady=5)
         
         # Frame para preview do vídeo
         preview_frame = ttk.LabelFrame(main_frame, text="Preview do Vídeo", padding="10")
-        preview_frame.grid(row=8, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=10)
+        preview_frame.grid(row=9, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=10)
         
         self.video_info_label = ttk.Label(preview_frame, text="Nenhum vídeo carregado")
         self.video_info_label.grid(row=0, column=0, columnspan=2, pady=5)
@@ -97,10 +102,15 @@ class VideoGeneratorApp:
     def generate_video(self):
         # Validar campos
         api_key = self.api_key_entry.get().strip()
+        token = self.token_entry.get().strip()
         prompt = self.prompt_text.get("1.0", tk.END).strip()
         
         if not api_key:
             messagebox.showerror("Erro", "Por favor, insira a API Key")
+            return
+        
+        if not token:
+            messagebox.showerror("Erro", "Por favor, insira o Token")
             return
         
         if not prompt:
@@ -144,8 +154,9 @@ class VideoGeneratorApp:
             webhook_data = {
                 "prompt": data.get("script", {}).get("input", ""),
                 "api_key": self.api_key_entry.get().strip(),
+                "token": self.token_entry.get().strip(),
                 "languages": [self.language_var.get()],
-                "auth_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJjb2RpZ28iOiIiLCJpYXQiOjE3NTY5MzA2MDh9.LVfTl4kYrRjR9a89EZny_vkmzsAId9jRpLAmvodiexI"
+                "auth_token": self.token_entry.get().strip()
             }
             
             # Mostrar no console o POST que será enviado
