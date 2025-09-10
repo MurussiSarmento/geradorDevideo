@@ -34,7 +34,7 @@ class VideoGeneratorApp:
         
         # Sistema de processamento em lote
         self.prompt_manager = PromptManager()
-        self.thread_pool = ThreadPoolManager(max_threads=3)
+        self.thread_pool = ThreadPoolManager(max_threads=config.DEFAULT_MAX_THREADS)
         self.progress_tracker = ProgressTracker()
         self.batch_config = BatchConfiguration()
         self.batch_processing = False
@@ -375,7 +375,7 @@ class VideoGeneratorApp:
         
         # Threads simultâneas
         ttk.Label(config_frame, text="Threads simultâneas:").grid(row=0, column=0, sticky=tk.W, pady=5)
-        self.threads_var = tk.IntVar(value=3)
+        self.threads_var = tk.IntVar(value=config.DEFAULT_MAX_THREADS)
         threads_spin = ttk.Spinbox(config_frame, from_=1, to=10, textvariable=self.threads_var, width=10)
         threads_spin.grid(row=0, column=1, sticky=tk.W, pady=5)
         threads_spin.bind('<FocusOut>', self.update_thread_count)

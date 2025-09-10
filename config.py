@@ -8,7 +8,7 @@ LOG_MAX_LINES = 1000      # máximo de linhas no log
 AUTO_SCROLL_LOGS = True   # auto-scroll dos logs
 
 # Configurações de Threading
-DEFAULT_MAX_THREADS = 3   # threads padrão para processamento
+DEFAULT_MAX_THREADS = 2   # threads padrão para processamento
 MAX_ALLOWED_THREADS = 10  # máximo de threads permitidas
 THREAD_TIMEOUT = 600      # timeout em segundos para requisições (10 minutos)
 

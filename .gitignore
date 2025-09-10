@@ -1,0 +1,31 @@
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Logs
+*.log
+
+# Build artifacts
+build/
+dist/
+*.spec
+
+# Virtual environments
+.env
+.venv
+env/
+venv/
+
+# IDE settings
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# App outputs
+batch_videos/
+*.mp4

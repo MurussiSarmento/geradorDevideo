@@ -47,7 +47,7 @@ class PromptItem:
 @dataclass
 class BatchConfiguration:
     """Configurações para processamento em lote"""
-    max_threads: int = 3
+    max_threads: int = 2
     default_language: str = 'pt'
     request_delay: float = 0.5
     request_timeout: int = 300
@@ -191,7 +191,7 @@ class PromptManager:
 class ThreadPoolManager:
     """Gerencia threads de processamento simultâneo"""
     
-    def __init__(self, max_threads: int = 3):
+    def __init__(self, max_threads: int = 2):
         self.max_threads = max_threads
         self.active_threads: Dict[str, threading.Thread] = {}
         self.thread_semaphore = threading.Semaphore(max_threads)
