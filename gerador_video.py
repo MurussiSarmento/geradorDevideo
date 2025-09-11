@@ -208,20 +208,26 @@ class VideoGeneratorApp:
             messagebox.showerror("Erro", "Preencha API Key e Token primeiro")
             return
         
-        # Teste simples
+        # Seleciona endpoint e payload conforme formato 16:9 ou 9:16
+        use_reels = hasattr(self, 'aspect_var') and self.aspect_var.get() == '9:16'
+        endpoint = config.REELS_WEBHOOK_URL if use_reels else config.WEBHOOK_URL
+
         test_data = {
             "prompt": "Hello, this is a test",
             "api_key": api_key,
-            "token": token,
             "languages": ["en"],
             "auth_token": token
         }
+        if not use_reels:
+            test_data["token"] = token
         
         def test_in_thread():
             try:
                 self.log("🚀 Enviando requisição de teste...")
+                self.log(f"📐 Formato: {'9:16 (REELS)' if use_reels else '16:9'}")
+                self.log(f"🔗 Endpoint de teste: {endpoint}")
                 response = requests.post(
-                    config.WEBHOOK_URL,
+                    endpoint,
                     headers=config.DEFAULT_HEADERS,
                     data=json.dumps(test_data),
                     timeout=config.REQUEST_TIMEOUT
@@ -386,6 +392,28 @@ class VideoGeneratorApp:
         batch_lang_combo = ttk.Combobox(config_frame, textvariable=self.batch_language_var, 
                                        values=["pt", "en", "es", "fr", "de", "it"], state="readonly", width=10)
         batch_lang_combo.grid(row=0, column=3, sticky=tk.W, pady=5)
+
+        # Retries em caso de erro
+        ttk.Label(config_frame, text="Retries (erros):").grid(row=0, column=4, sticky=tk.W, padx=(20, 5), pady=5)
+        self.batch_retries_var = tk.IntVar(value=getattr(self.batch_config, 'max_retries', config.CONNECTION_RETRIES))
+        retries_spin = ttk.Spinbox(config_frame, from_=0, to=10, increment=1, textvariable=self.batch_retries_var, width=10)
+        retries_spin.grid(row=0, column=5, sticky=tk.W, pady=5)
+        retries_spin.bind('<FocusOut>', self.update_batch_retries)
+
+        # Formato do vídeo (proporção)
+        ttk.Label(config_frame, text="Formato:").grid(row=1, column=0, sticky=tk.W, pady=5)
+        self.aspect_var = tk.StringVar(value="16:9")
+        ttk.Radiobutton(config_frame, text="16:9 (padrão)", variable=self.aspect_var, value="16:9").grid(row=1, column=1, sticky=tk.W)
+        ttk.Radiobutton(config_frame, text="9:16 (vertical)", variable=self.aspect_var, value="9:16").grid(row=1, column=2, sticky=tk.W)
+        # Aplica defaults quando o formato é alterado (ex.: 9:16 -> 1 thread e 120s)
+        self.aspect_var.trace_add("write", self.on_aspect_change)
+        
+        # Delay opcional entre gerações (segundos)
+        ttk.Label(config_frame, text="Delay entre gerações (s):").grid(row=1, column=3, sticky=tk.W, padx=(20, 5), pady=5)
+        self.batch_delay_var = tk.DoubleVar(value=self.batch_config.request_delay if hasattr(self, 'batch_config') else 0.0)
+        delay_spin = ttk.Spinbox(config_frame, from_=0.0, to=120.0, increment=0.1, textvariable=self.batch_delay_var, width=10)
+        delay_spin.grid(row=1, column=4, sticky=tk.W, pady=5)
+        delay_spin.bind('<FocusOut>', self.update_batch_delay)
         
         # Entrada de prompts
         prompts_frame = ttk.LabelFrame(batch_main, text="Prompts (máximo 50)", padding="10")
@@ -543,29 +571,34 @@ class VideoGeneratorApp:
         self.log(f"📡 [{thread_name}] Iniciando envio de requisição...")
         
         try:
-            headers = {
-                "Content-Type": "application/json",
-                "Referer": "https://vetaia.cloud/",
-                "sec-ch-ua": '"Not;A=Brand";v="99", "Google Chrome";v="139", "Chromium";v="139"',
-                "sec-ch-ua-mobile": "?0",
-                "sec-ch-ua-platform": '"Windows"',
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36"
-            }
+            headers = dict(config.DEFAULT_HEADERS)
             
             self.log(f"🔧 [{thread_name}] Headers configurados")
             
+            # Selecionar endpoint conforme formato 16:9 ou 9:16
+            use_reels = hasattr(self, 'aspect_var') and self.aspect_var.get() == '9:16'
+            endpoint = config.REELS_WEBHOOK_URL if use_reels else config.WEBHOOK_URL
+            
             # Preparar dados para enviar ao webhook
-            webhook_data = {
-                "prompt": data.get("script", {}).get("input", ""),
-                "api_key": self.api_key_entry.get().strip(),
-                "token": self.token_entry.get().strip(),
-                "languages": [self.language_var.get()],
-                "auth_token": self.token_entry.get().strip()
-            }
+            if use_reels:
+                webhook_data = {
+                    "prompt": data.get("script", {}).get("input", ""),
+                    "api_key": self.api_key_entry.get().strip(),
+                    "languages": [self.language_var.get()],
+                    "auth_token": self.token_entry.get().strip()
+                }
+            else:
+                webhook_data = {
+                    "prompt": data.get("script", {}).get("input", ""),
+                    "api_key": self.api_key_entry.get().strip(),
+                    "token": self.token_entry.get().strip(),
+                    "languages": [self.language_var.get()],
+                    "auth_token": self.token_entry.get().strip()
+                }
             
             # Log detalhado da requisição
             self.log(f"📤 [{thread_name}] Preparando POST para webhook...")
-            self.log(f"🔗 URL: https://n8n.srv943626.hstgr.cloud/webhook/9a20b730-2fd6-4d92-9c62-3e7c288e241b")
+            self.log(f"🔗 URL: {endpoint}")
             self.log(f"📦 Payload size: {len(json.dumps(webhook_data))} bytes")
             self.log(f"🌐 Language: {webhook_data.get('languages', ['unknown'])}")
             
@@ -574,10 +607,10 @@ class VideoGeneratorApp:
             start_time = time.time()
             
             response = requests.post(
-                "https://n8n.srv943626.hstgr.cloud/webhook/9a20b730-2fd6-4d92-9c62-3e7c288e241b",
+                endpoint,
                 headers=headers,
                 data=json.dumps(webhook_data),
-                timeout=30  # Timeout de 30 segundos
+                timeout=config.REQUEST_TIMEOUT
             )
             
             request_time = time.time() - start_time
@@ -841,6 +874,58 @@ class VideoGeneratorApp:
                 self.dispatch_pending_prompts()
             except Exception as e:
                 self.log(f"Erro ao despachar após mudar threads: {e}", "ERROR")
+
+    def update_batch_retries(self, event=None):
+        """Atualiza o número de retries em caso de erro no processamento em lote"""
+        try:
+            retries = int(self.batch_retries_var.get()) if hasattr(self, 'batch_retries_var') else config.CONNECTION_RETRIES
+            retries = max(0, min(10, retries))
+            if hasattr(self, 'batch_retries_var'):
+                self.batch_retries_var.set(retries)
+            # Persistir na configuração do lote
+            if hasattr(self, 'batch_config'):
+                self.batch_config.max_retries = retries
+            self.log(f"🔁 Retries configurados para {retries}")
+        except Exception as e:
+            self.log(f"Erro ao atualizar retries: {e}", "ERROR")
+
+    def update_batch_delay(self, event=None):
+        """Atualiza o delay entre gerações do processamento em lote"""
+        try:
+            delay = float(self.batch_delay_var.get()) if hasattr(self, 'batch_delay_var') else 0.0
+            if delay < 0:
+                delay = 0.0
+            if hasattr(self, 'batch_delay_var'):
+                self.batch_delay_var.set(delay)
+            self.batch_config.request_delay = delay
+            self.log(f"⏳ Delay entre gerações ajustado para {delay:.2f}s")
+        except Exception as e:
+            self.log(f"Erro ao atualizar delay: {e}", "ERROR")
+    
+    def on_aspect_change(self, *args):
+        """Ajusta threads e delay automaticamente quando o formato é alterado"""
+        try:
+            value = self.aspect_var.get() if hasattr(self, 'aspect_var') else '16:9'
+            if value == '9:16':
+                # Defaults para vertical (Reels)
+                if hasattr(self, 'threads_var'):
+                    self.threads_var.set(1)
+                    self.update_thread_count()
+                if hasattr(self, 'batch_delay_var'):
+                    self.batch_delay_var.set(120.0)
+                    self.update_batch_delay()
+                self.log("⚙️  Formato 9:16 selecionado: threads=1 e delay=120s aplicados automaticamente")
+            else:
+                # Restaurar defaults para horizontal
+                if hasattr(self, 'threads_var'):
+                    self.threads_var.set(config.DEFAULT_MAX_THREADS)
+                    self.update_thread_count()
+                if hasattr(self, 'batch_delay_var'):
+                    self.batch_delay_var.set(0.0)
+                    self.update_batch_delay()
+                self.log(f"⚙️  Formato {value} selecionado: threads={config.DEFAULT_MAX_THREADS} e delay=0s aplicados")
+        except Exception as e:
+            self.log(f"⚠️ Erro ao aplicar defaults de formato: {e}", level="ERROR")
     
     def schedule_dispatcher(self):
         """Agenda loop leve para despachar prompts pendentes automaticamente durante o lote"""
@@ -872,22 +957,57 @@ class VideoGeneratorApp:
         capacity = max(0, self.thread_pool.max_threads - active)
         if capacity <= 0:
             return
+        # Guardar janela de espera para delay pós-conclusão
+        try:
+            delay_guard = getattr(self.batch_config, 'request_delay', 0.0)
+        except Exception:
+            delay_guard = 0.0
+        if delay_guard and delay_guard > 0:
+            next_at = getattr(self, 'next_allowed_dispatch_at', 0)
+            now = time.time()
+            if now < next_at:
+                # Aguardando janela de delay para despachar novamente
+                return
         to_submit = pending[:capacity]
         if not to_submit:
             return
         self.log(f"🚚 Despachando {len(to_submit)} prompts pendentes (capacidade: {capacity}, ativas: {active})")
-        for prompt in to_submit:
-            # Marcar como PROCESSING antes de submeter para evitar duplicidade
-            try:
-                self.prompt_manager.update_prompt_status(prompt.id, PromptStatus.PROCESSING)
-                self.schedule_tree_update()
-            except Exception:
-                pass
-            self.thread_pool.submit_prompt(
-                prompt,
-                self.process_single_prompt_batch,
-                self.on_prompt_completed
-            )
+        
+        # Respeitar delay opcional entre submissões usando agendamento (não bloqueia UI)
+        delay_seconds = getattr(self.batch_config, 'request_delay', 0.0)
+        if delay_seconds and delay_seconds > 0:
+            delay_ms = int(max(0.0, delay_seconds) * 1000)
+            for idx, prompt in enumerate(to_submit):
+                # Marcar como PROCESSING imediatamente para evitar agendamentos duplicados em próximos ciclos
+                try:
+                    self.prompt_manager.update_prompt_status(prompt.id, PromptStatus.PROCESSING)
+                    self.schedule_tree_update()
+                except Exception:
+                    pass
+                def _submit(p=prompt):
+                    # Apenas submeter (status já marcado)
+                    self.thread_pool.submit_prompt(
+                        p,
+                        self.process_single_prompt_batch,
+                        self.on_prompt_completed
+                    )
+                try:
+                    self.root.after(delay_ms * idx, _submit)
+                except Exception:
+                    _submit()
+        else:
+            for prompt in to_submit:
+                # Marcar como PROCESSING antes de submeter para evitar duplicidade
+                try:
+                    self.prompt_manager.update_prompt_status(prompt.id, PromptStatus.PROCESSING)
+                    self.schedule_tree_update()
+                except Exception:
+                    pass
+                self.thread_pool.submit_prompt(
+                    prompt,
+                    self.process_single_prompt_batch,
+                    self.on_prompt_completed
+                )
     
     def load_prompts_from_file(self):
         """Carrega prompts de um arquivo de texto"""
@@ -1087,6 +1207,29 @@ class VideoGeneratorApp:
             messagebox.showwarning("Aviso", "Nenhum prompt pendente para processar")
             return
         
+        # Capturar credenciais e formato selecionado para uso nas threads
+        self.batch_api_key = api_key
+        self.batch_token = token
+        self.batch_aspect_choice = self.aspect_var.get() if hasattr(self, 'aspect_var') else "16:9"
+        self.log(f"📐 Formato selecionado: {self.batch_aspect_choice}")
+        
+        # Capturar delay configurado (segundos)
+        try:
+            self.batch_config.request_delay = float(self.batch_delay_var.get()) if hasattr(self, 'batch_delay_var') else self.batch_config.request_delay
+            self.log(f"⏳ Delay configurado: {self.batch_config.request_delay:.2f}s")
+        except Exception:
+            pass
+        
+        # Capturar retries configurados
+        try:
+            self.batch_config.max_retries = int(self.batch_retries_var.get()) if hasattr(self, 'batch_retries_var') else getattr(self.batch_config, 'max_retries', config.CONNECTION_RETRIES)
+            self.log(f"🔁 Retries configurados: {self.batch_config.max_retries}")
+        except Exception:
+            pass
+        
+        # Permitir primeiro despacho imediatamente ao iniciar
+        self.next_allowed_dispatch_at = 0
+        
         # Iniciar processamento
         self.log(f"⚡ Configurando processamento para {len(pending_prompts)} prompts...")
         self.batch_processing = True
@@ -1146,29 +1289,34 @@ class VideoGeneratorApp:
                 "source_url": "https://create-images-results.d-id.com/DefaultPresenters/Noelle_f/image.jpeg"
             }
             
-            headers = {
-                "Content-Type": "application/json",
-                "Referer": "https://vetaia.cloud/",
-                "sec-ch-ua": '"Not;A=Brand";v="99", "Google Chrome";v="139", "Chromium";v="139"',
-                "sec-ch-ua-mobile": "?0",
-                "sec-ch-ua-platform": '"Windows"',
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36"
-            }
+            headers = dict(config.DEFAULT_HEADERS)
+            
+            # Selecionar endpoint conforme formato 16:9 ou 9:16 (vertical)
+            use_reels = getattr(self, 'batch_aspect_choice', '16:9') == '9:16'
+            endpoint = config.REELS_WEBHOOK_URL if use_reels else config.WEBHOOK_URL
             
             # Preparar dados para webhook
-            webhook_data = {
-                "prompt": prompt_item.prompt_text,
-                "api_key": self.api_key_entry.get().strip(),
-                "token": self.token_entry.get().strip(),
-                "languages": [prompt_item.language],
-                "auth_token": self.token_entry.get().strip()
-            }
+            if use_reels:
+                webhook_data = {
+                    "prompt": prompt_item.prompt_text,
+                    "api_key": getattr(self, 'batch_api_key', self.api_key_entry.get().strip()),
+                    "languages": [prompt_item.language],
+                    "auth_token": getattr(self, 'batch_token', self.token_entry.get().strip())
+                }
+            else:
+                webhook_data = {
+                    "prompt": prompt_item.prompt_text,
+                    "api_key": getattr(self, 'batch_api_key', self.api_key_entry.get().strip()),
+                    "token": getattr(self, 'batch_token', self.token_entry.get().strip()),
+                    "languages": [prompt_item.language],
+                    "auth_token": getattr(self, 'batch_token', self.token_entry.get().strip())
+                }
             
             # Fazer requisição com retry
             self.log(f"🚀 [{thread_name}] Enviando requisição para prompt {prompt_id}...")
             start_time = time.time()
             
-            max_retries = config.CONNECTION_RETRIES
+            max_retries = getattr(self.batch_config, 'max_retries', config.CONNECTION_RETRIES)
             for attempt in range(max_retries + 1):
                 try:
                     if attempt > 0:
@@ -1176,7 +1324,7 @@ class VideoGeneratorApp:
                         time.sleep(config.RETRY_DELAY * attempt)
                     
                     response = requests.post(
-                        config.WEBHOOK_URL,
+                        endpoint,
                         headers=headers,
                         data=json.dumps(webhook_data),
                         timeout=config.REQUEST_TIMEOUT
@@ -1347,11 +1495,20 @@ class VideoGeneratorApp:
             self.root.after(0, self.on_batch_completed)
         else:
             self.log(f"⏳ [{thread_name}] Processamento continua...")
-            # Tentar despachar imediatamente mais prompts para ocupar slots liberados
-            try:
-                self.dispatch_pending_prompts()
-            except Exception as e:
-                self.log(f"Erro ao despachar após conclusão: {e}", "ERROR")
+            # Aplicar delay pós-conclusão antes de despachar próximo(s)
+            delay = getattr(self.batch_config, 'request_delay', 0.0)
+            if delay and delay > 0:
+                self.next_allowed_dispatch_at = time.time() + delay
+                try:
+                    self.root.after(int(delay * 1000), self.dispatch_pending_prompts)
+                except Exception as e:
+                    self.log(f"Falha ao agendar pós-conclusão, despachante cuidará do timing: {e}", "WARNING")
+            else:
+                # Tentar despachar imediatamente mais prompts para ocupar slots liberados
+                try:
+                    self.dispatch_pending_prompts()
+                except Exception as e:
+                    self.log(f"Erro ao despachar após conclusão: {e}", "ERROR")
     
     def on_batch_completed(self):
         """Chamado quando o lote é concluído"""
