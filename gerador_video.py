@@ -432,6 +432,12 @@ class VideoGeneratorApp:
         self.prompts_tree.pack(side="left", fill="both", expand=True)
         tree_scroll.pack(side="right", fill="y")
         
+        # Controles da lista
+        list_controls = ttk.Frame(list_frame)
+        list_controls.pack(side="bottom", fill="x", pady=5)
+        self.clear_prompt_list_button = ttk.Button(list_controls, text="Limpar Lista de Prompts", command=self.clear_prompt_list)
+        self.clear_prompt_list_button.pack(side="left")
+        
         # Menu de contexto para treeview
         self.tree_menu = tk.Menu(self.root, tearoff=0)
         self.tree_menu.add_command(label="Remover Prompt", command=self.remove_selected_prompt)
@@ -457,6 +463,7 @@ class VideoGeneratorApp:
         self.stop_batch_button = ttk.Button(buttons_frame, text="Parar", command=self.stop_batch_processing, state="disabled")
         self.stop_batch_button.pack(side="left", padx=5)
         
+        ttk.Button(buttons_frame, text="Unir Vídeos", command=self.merge_videos_button).pack(side="right", padx=(5, 0))
         ttk.Button(buttons_frame, text="Baixar Todos", command=self.download_all_videos).pack(side="right")
         
         # Progresso
@@ -873,7 +880,7 @@ class VideoGeneratorApp:
             # Marcar como PROCESSING antes de submeter para evitar duplicidade
             try:
                 self.prompt_manager.update_prompt_status(prompt.id, PromptStatus.PROCESSING)
-                self.root.after(0, self.update_prompts_tree)
+                self.schedule_tree_update()
             except Exception:
                 pass
             self.thread_pool.submit_prompt(
@@ -902,6 +909,37 @@ class VideoGeneratorApp:
     def clear_batch_prompts(self):
         """Limpa a área de texto de prompts"""
         self.batch_prompts_text.delete(1.0, tk.END)
+    
+    def clear_prompt_list(self):
+        """Limpa a lista de prompts já adicionados na Treeview e no gerenciador"""
+        # Bloquear durante processamento em andamento
+        if getattr(self, 'batch_processing', False) or (hasattr(self, 'thread_pool') and self.thread_pool.get_active_count() > 0):
+            messagebox.showwarning(
+                "Indisponível",
+                "Não é possível limpar a lista enquanto o processamento estiver em andamento.\nPause ou pare o processamento primeiro."
+            )
+            return
+        
+        # Limpar prompts do gerenciador
+        try:
+            self.prompt_manager.clear_all_prompts()
+        except Exception:
+            pass
+        
+        # Atualizar árvore e progresso
+        self.update_prompts_tree()
+        try:
+            self.progress_tracker.start_tracking(0)
+        except Exception:
+            pass
+        if hasattr(self, 'batch_progress'):
+            self.batch_progress['value'] = 0
+        if hasattr(self, 'batch_progress_label'):
+            self.batch_progress_label.config(text="0/0 (0%)")
+        if hasattr(self, 'batch_status_label'):
+            self.batch_status_label.config(text="Lista de prompts limpa")
+        
+        self.log("🧹 Lista de prompts limpa pelo usuário")
     
     def add_prompts_to_batch(self):
         """Adiciona prompts da área de texto à lista de processamento"""
@@ -950,6 +988,24 @@ class VideoGeneratorApp:
                 prompt.status.value,
                 display_url
             ))
+    
+    def schedule_tree_update(self):
+        """Agenda atualização da TreeView com debounce para evitar múltiplas reconstruções seguidas"""
+        try:
+            if not hasattr(self, '_tree_update_scheduled'):
+                self._tree_update_scheduled = False
+            if self._tree_update_scheduled:
+                return
+            self._tree_update_scheduled = True
+            def _apply():
+                try:
+                    self.update_prompts_tree()
+                finally:
+                    self._tree_update_scheduled = False
+            self.root.after(100, _apply)
+        except Exception:
+            # Fallback em caso de erro
+            self.update_prompts_tree()
     
     def show_tree_menu(self, event):
         """Mostra menu de contexto na árvore"""
@@ -1046,30 +1102,23 @@ class VideoGeneratorApp:
         self.pause_batch_button.config(state="normal")
         self.stop_batch_button.config(state="normal")
         
-        # Processar cada prompt
-        self.log(f"🎯 Submetendo {len(pending_prompts)} prompts para processamento...")
-        for i, prompt in enumerate(pending_prompts, 1):
-            self.log(f"📤 [{i}/{len(pending_prompts)}] Submetendo prompt {prompt.id}: {prompt.prompt_text[:30]}...")
-            # Marcar como PROCESSING antes de submeter para evitar duplicidade com o despachante
-            try:
-                self.prompt_manager.update_prompt_status(prompt.id, PromptStatus.PROCESSING)
-                self.root.after(0, self.update_prompts_tree)
-            except Exception:
-                pass
-            self.thread_pool.submit_prompt(
-                prompt, 
-                self.process_single_prompt_batch,
-                self.on_prompt_completed
-            )
-            # Pequeno delay para evitar sobrecarga
-            time.sleep(0.1)
-        
-        # Iniciar despachante automático
+        # Não submeter em loop no main thread; iniciar despachante que fará a submissão incremental
+        self.log("🎯 Iniciando despacho incremental de prompts...")
         if not getattr(self, 'dispatcher_running', False):
             self.schedule_dispatcher()
+        # Disparar um despacho imediato leve
+        try:
+            self.dispatch_pending_prompts()
+        except Exception as e:
+            self.log(f"Erro ao despachar imediatamente: {e}", "ERROR")
         
         self.log(f"✅ Processamento iniciado com sucesso! {len(pending_prompts)} prompts em fila")
-        messagebox.showinfo("Iniciado", f"Processamento iniciado para {len(pending_prompts)} prompts")
+        if hasattr(self, 'batch_status_label'):
+            self.batch_status_label.config(text=f"Processamento iniciado: {len(pending_prompts)} prompts")
+        try:
+            self.root.after(0, lambda: self.root.title(f"Iniciado — {len(pending_prompts)} prompts"))
+        except Exception:
+            pass
     
     def process_single_prompt_batch(self, prompt_item):
         """Processa um prompt individual no lote"""
@@ -1284,7 +1333,7 @@ class VideoGeneratorApp:
         
         # Atualizar interface na thread principal
         self.log(f"🔄 [{thread_name}] Agendando atualização da interface")
-        self.root.after(0, self.update_prompts_tree)
+        self.schedule_tree_update()
         
         # Verificar se processamento terminou
         pending = self.prompt_manager.get_pending_prompts()
@@ -1313,20 +1362,25 @@ class VideoGeneratorApp:
         self.pause_batch_button.config(state="disabled")
         self.stop_batch_button.config(state="disabled")
         
-        # Mostrar resumo
+        # Mostrar resumo sem diálogo modal para evitar travamento
         summary = self.progress_tracker.get_processing_summary()
         completed = summary['completed_prompts']
         failed = summary['failed_prompts']
         total = summary['total_prompts']
-        
-        messagebox.showinfo(
-            "Processamento Concluído",
-            f"Processamento finalizado!\n\n"
-            f"Total: {total}\n"
-            f"Concluídos: {completed}\n"
-            f"Falharam: {failed}\n"
-            f"Taxa de sucesso: {(completed/total*100):.1f}%"
+        try:
+            rate = (completed / total * 100) if total else 0.0
+        except Exception:
+            rate = 0.0
+        summary_text = (
+            f"Processamento finalizado! Total: {total} | Concluídos: {completed} | Falharam: {failed} | Sucesso: {rate:.1f}%"
         )
+        if hasattr(self, 'batch_status_label'):
+            self.batch_status_label.config(text=summary_text)
+        self.log("✅ " + summary_text)
+        try:
+            self.root.after(0, lambda: self.root.title(f"Concluído — {completed}/{total} (Sucesso {rate:.1f}%)"))
+        except Exception:
+            pass
     
     def pause_batch_processing(self):
         """Pausa processamento em lote"""
@@ -1336,7 +1390,14 @@ class VideoGeneratorApp:
         self.start_batch_button.config(state="normal")
         self.pause_batch_button.config(state="disabled")
         
-        messagebox.showinfo("Pausado", "Processamento pausado")
+        # Feedback não bloqueante
+        if hasattr(self, 'batch_status_label'):
+            self.batch_status_label.config(text="Processamento pausado")
+        self.log("⏸️ Processamento pausado")
+        try:
+            self.root.after(0, lambda: self.root.title("Pausado — processamento em lote"))
+        except Exception:
+            pass
     
     def stop_batch_processing(self):
         """Para processamento em lote"""
@@ -1353,43 +1414,360 @@ class VideoGeneratorApp:
         self.stop_batch_button.config(state="disabled")
         
         self.update_prompts_tree()
-        messagebox.showinfo("Parado", "Processamento interrompido")
+        
+        # Feedback não bloqueante
+        if hasattr(self, 'batch_status_label'):
+            self.batch_status_label.config(text="Processamento interrompido")
+        self.log("🛑 Processamento interrompido")
+        try:
+            self.root.after(0, lambda: self.root.title("Parado — processamento em lote"))
+        except Exception:
+            pass
     
     def download_all_videos(self):
-        """Baixa todos os vídeos concluídos"""
+        """Compacta todos os vídeos concluídos em um único ZIP, salvando no local escolhido e limpando os downloads temporários"""
         completed_prompts = self.prompt_manager.get_prompts_by_status(PromptStatus.COMPLETED)
         
         if not completed_prompts:
             messagebox.showwarning("Aviso", "Nenhum vídeo concluído para baixar")
             return
         
-        # Escolher pasta de destino
-        folder_path = filedialog.askdirectory(title="Escolher pasta para downloads")
-        if not folder_path:
+        # Escolher arquivo ZIP de destino
+        zip_save_path = filedialog.asksaveasfilename(
+            defaultextension=".zip",
+            filetypes=[("Arquivos ZIP", "*.zip")],
+            title="Salvar ZIP com todos os vídeos"
+        )
+        if not zip_save_path:
             return
         
-        # Baixar cada vídeo
-        downloaded = 0
-        for prompt in completed_prompts:
-            if prompt.video_url and not prompt.video_url.startswith('file:'):
-                try:
-                    filename = f"video_{prompt.id}.mp4"
-                    file_path = os.path.join(folder_path, filename)
-                    
-                    response = requests.get(prompt.video_url, stream=True)
-                    response.raise_for_status()
-                    
-                    with open(file_path, 'wb') as file:
-                        for chunk in response.iter_content(chunk_size=8192):
-                            if chunk:
-                                file.write(chunk)
-                    
-                    downloaded += 1
-                except Exception as e:
-                    print(f"Erro ao baixar vídeo {prompt.id}: {str(e)}")
+        self.batch_status_label.config(text="Preparando ZIP com vídeos...")
         
-        messagebox.showinfo("Download Concluído", f"{downloaded} vídeos baixados com sucesso!")
+        def _worker_zip():
+            import zipfile, tempfile, shutil, re
+            from urllib.parse import urlparse
+            temp_dir = tempfile.mkdtemp(prefix="gv_videos_")
+            try:
+                # Mapa de ordem dos prompts (topo -> base)
+                order_map = {p.id: idx + 1 for idx, p in enumerate(self.prompt_manager.get_all_prompts())}
+                # Ordenar concluídos pela ordem original
+                ordered_prompts = sorted(completed_prompts, key=lambda pr: order_map.get(pr.id, 10**9))
+                
+                downloaded_files = []
+                for p in ordered_prompts:
+                    url = getattr(p, 'video_url', None)
+                    if not url:
+                        continue
+                    order_idx = order_map.get(p.id, len(downloaded_files) + 1)
+                    safe_id = re.sub(r"[^a-zA-Z0-9_-]", "_", str(p.id))
+                    filename = f"{order_idx:03d}_video_{safe_id}.mp4"
+                    dest_path = os.path.join(temp_dir, filename)
+                    
+                    try:
+                        if url.startswith('file:'):
+                            # Converter file URL para caminho local
+                            parsed = urlparse(url)
+                            local_path = parsed.path
+                            if os.name == 'nt' and local_path.startswith('/'):
+                                local_path = local_path.lstrip('/')
+                            local_path = local_path.replace('/', os.sep)
+                            shutil.copy2(local_path, dest_path)
+                        else:
+                            # Download remoto
+                            resp = requests.get(url, stream=True, timeout=120)
+                            resp.raise_for_status()
+                            with open(dest_path, 'wb') as f:
+                                for chunk in resp.iter_content(chunk_size=8192):
+                                    if chunk:
+                                        f.write(chunk)
+                        downloaded_files.append(dest_path)
+                    except Exception as e:
+                        self.log(f"Erro ao obter vídeo {p.id}: {e}", "ERROR")
+                        continue
+                
+                if not downloaded_files:
+                    self.root.after(0, lambda: messagebox.showerror("Erro", "Não foi possível obter nenhum vídeo para zipar."))
+                    return
+                
+                # Criar ZIP
+                with zipfile.ZipFile(zip_save_path, 'w', compression=zipfile.ZIP_DEFLATED) as zf:
+                    for f in downloaded_files:
+                        zf.write(f, arcname=os.path.basename(f))
+                
+                # Limpeza: deletar arquivos baixados temporários
+                shutil.rmtree(temp_dir, ignore_errors=True)
+                
+                self.root.after(0, lambda: [
+                    self.batch_status_label.config(text="✅ ZIP salvo com sucesso"),
+                    messagebox.showinfo("Sucesso", f"ZIP salvo em:\n{zip_save_path}")
+                ])
+            except Exception as e:
+                try:
+                    shutil.rmtree(temp_dir, ignore_errors=True)
+                except Exception:
+                    pass
+                self.root.after(0, lambda: [
+                    self.batch_status_label.config(text="❌ Erro ao criar ZIP"),
+                    messagebox.showerror("Erro", f"Erro ao criar ZIP: {e}")
+                ])
+        
+        threading.Thread(target=_worker_zip, daemon=True).start()
     
+    def merge_videos_button(self):
+        """Inicia fluxo para unir vídeos em um único arquivo, a partir da sessão atual, ZIPs ou pasta, com logs detalhados e barra de progresso."""
+        try:
+            import tempfile, shutil, re, zipfile
+            from urllib.parse import urlparse
+
+            self.log("🧩 Iniciando união de vídeos...")
+
+            use_session = messagebox.askyesnocancel(
+                "Fonte de Vídeos",
+                "Usar vídeos concluídos desta sessão?\nSim = usar sessão atual\nNão = selecionar arquivos ZIP/MP4 ou uma pasta"
+            )
+            if use_session is None:
+                self.log("❎ União de vídeos cancelada pelo usuário")
+                return
+
+            temp_dir = tempfile.mkdtemp(prefix="gv_merge_")
+            collected_files = []
+
+            def natural_key(s: str):
+                parts = re.split(r'(\d+)', os.path.basename(s))
+                return [int(p) if p.isdigit() else p.lower() for p in parts]
+
+            if use_session:
+                self.log("🔎 Coletando vídeos concluídos da sessão atual na ordem dos prompts...")
+                completed_prompts = self.prompt_manager.get_prompts_by_status(PromptStatus.COMPLETED)
+                if not completed_prompts:
+                    messagebox.showwarning("Aviso", "Nenhum vídeo concluído na sessão atual")
+                    shutil.rmtree(temp_dir, ignore_errors=True)
+                    return
+                order_map = {p.id: idx + 1 for idx, p in enumerate(self.prompt_manager.get_all_prompts())}
+                ordered = sorted(completed_prompts, key=lambda pr: order_map.get(pr.id, 10**9))
+                for p in ordered:
+                    url = getattr(p, 'video_url', None)
+                    if not url:
+                        continue
+                    order_idx = order_map.get(p.id, len(collected_files) + 1)
+                    safe_id = re.sub(r"[^a-zA-Z0-9_-]", "_", str(p.id))
+                    dest_name = f"{order_idx:03d}_video_{safe_id}.mp4"
+                    dest_path = os.path.join(temp_dir, dest_name)
+                    try:
+                        if url.startswith('file:'):
+                            parsed = urlparse(url)
+                            local_path = parsed.path
+                            if os.name == 'nt' and local_path.startswith('/'):
+                                local_path = local_path.lstrip('/')
+                            local_path = local_path.replace('/', os.sep)
+                            shutil.copy2(local_path, dest_path)
+                        else:
+                            resp = requests.get(url, stream=True, timeout=120)
+                            resp.raise_for_status()
+                            with open(dest_path, 'wb') as f:
+                                for chunk in resp.iter_content(chunk_size=8192):
+                                    if chunk:
+                                        f.write(chunk)
+                        collected_files.append(dest_path)
+                    except Exception as e:
+                        self.log(f"Erro ao obter vídeo {p.id}: {e}", "ERROR")
+                        continue
+                self.log(f"📦 Vídeos coletados da sessão: {len(collected_files)}")
+            else:
+                self.log("📂 Selecionando arquivos ZIP/MP4 ou pasta contendo MP4s...")
+                file_paths = filedialog.askopenfilenames(
+                    title="Selecionar arquivos ZIP ou MP4",
+                    filetypes=[("Arquivos ZIP", "*.zip"), ("Vídeos MP4", "*.mp4"), ("Todos os arquivos", "*.*")]
+                )
+                if not file_paths:
+                    folder = filedialog.askdirectory(title="Selecionar pasta com vídeos MP4")
+                    if not folder:
+                        shutil.rmtree(temp_dir, ignore_errors=True)
+                        self.log("❎ União de vídeos cancelada: nenhuma fonte selecionada")
+                        return
+                    # Coletar todos MP4s na pasta (apenas nível atual)
+                    for name in os.listdir(folder):
+                        if name.lower().endswith('.mp4'):
+                            collected_files.append(os.path.join(folder, name))
+                    self.log(f"📦 Vídeos coletados da pasta: {len(collected_files)}")
+                else:
+                    for path in file_paths:
+                        if path.lower().endswith('.zip'):
+                            try:
+                                with zipfile.ZipFile(path, 'r') as zf:
+                                    zf.extractall(temp_dir)
+                            except Exception as e:
+                                self.log(f"Erro ao extrair ZIP {os.path.basename(path)}: {e}", "ERROR")
+                        elif path.lower().endswith('.mp4'):
+                            collected_files.append(path)
+                    # Após extrair, coletar todos MP4s do temp_dir também
+                    for root_dir, _dirs, files in os.walk(temp_dir):
+                        for name in files:
+                            if name.lower().endswith('.mp4'):
+                                collected_files.append(os.path.join(root_dir, name))
+                    self.log(f"📦 Vídeos coletados de arquivos selecionados: {len(collected_files)}")
+
+            # Ordenar arquivos (ordem natural por nome)
+            collected_files = [f for f in collected_files if os.path.isfile(f)]
+            if not collected_files:
+                messagebox.showerror("Erro", "Nenhum arquivo de vídeo encontrado para unir")
+                shutil.rmtree(temp_dir, ignore_errors=True)
+                return
+            collected_files.sort(key=natural_key)
+            try:
+                preview_names = ", ".join(os.path.basename(f) for f in collected_files[:5])
+                more = "" if len(collected_files) <= 5 else f" ... (+{len(collected_files)-5})"
+                self.log(f"🧮 Ordem de união: {preview_names}{more}")
+            except Exception:
+                pass
+
+            # Escolher destino
+            out_path = filedialog.asksaveasfilename(
+                defaultextension=".mp4",
+                filetypes=[("Vídeos MP4", "*.mp4")],
+                title="Salvar vídeo unido como..."
+            )
+            if not out_path:
+                shutil.rmtree(temp_dir, ignore_errors=True)
+                self.log("❎ União de vídeos cancelada: destino não escolhido")
+                return
+
+            # Preparar barra de progresso
+            try:
+                self.batch_progress.config(mode='determinate', maximum=100, value=0)
+                self.batch_progress_label.config(text="Unindo vídeos: 0%")
+            except Exception:
+                pass
+            self.batch_status_label.config(text="Unindo vídeos... isso pode levar alguns minutos")
+
+            def _worker_merge(files, output_path, work_dir):
+                try:
+                    # Import tardio
+                    from moviepy.editor import VideoFileClip, concatenate_videoclips
+                    try:
+                        from proglog import ProgressBarLogger
+                    except Exception:
+                        ProgressBarLogger = None
+
+                    self.log(f"🔧 Preparando {len(files)} clipes para união...")
+
+                    clips = []
+                    for idx, fpath in enumerate(files, start=1):
+                        try:
+                            self.log(f"📥 Abrindo clipe {idx}/{len(files)}: {os.path.basename(fpath)}")
+                            clip = VideoFileClip(fpath)
+                            # Mitigar avisos de último frame incompleto: recorta ~1 frame do final (mín. 40-50ms)
+                            try:
+                                fps = float(getattr(clip, "fps", 0) or 0) or 24.0
+                                epsilon = max(0.05, 1.0 / fps)  # pelo menos um frame
+                                if getattr(clip, "duration", None) and clip.duration > epsilon:
+                                    clip = clip.subclip(0, clip.duration - epsilon)
+                            except Exception as _e:
+                                # Em caso de falha no ajuste, segue com o clipe original
+                                pass
+                            clips.append(clip)
+                        except Exception as e:
+                            self.log(f"Ignorando arquivo inválido: {fpath} ({e})", "WARNING")
+                    if not clips:
+                        self.root.after(0, lambda: [
+                            self.batch_status_label.config(text="❌ Nenhum clipe válido para unir"),
+                            messagebox.showerror("Erro", "Nenhum clipe válido encontrado para unir")
+                        ])
+                        return
+
+                    # Info de duração
+                    try:
+                        total_dur = sum([c.duration or 0 for c in clips])
+                        self.log(f"⏱️ Duração total aproximada dos clipes: {total_dur:.1f}s")
+                    except Exception:
+                        pass
+
+                    self.log("🧵 Concatenando clipes (compose)...")
+                    final = concatenate_videoclips(clips, method='compose')
+
+                    # Callback de progresso do MoviePy
+                    def on_progress(pct, elapsed, eta):
+                        try:
+                            self.root.after(0, lambda: [
+                                self.batch_progress.config(value=max(0, min(100, int(pct)))),
+                                self.batch_progress_label.config(text=f"Unindo vídeos: {int(pct)}%"),
+                                self.batch_status_label.config(text=f"Unindo... {int(pct)}% | ⏱ {int(elapsed)}s, ETA {int(eta)}s")
+                            ])
+                        except Exception:
+                            pass
+
+                    logger_obj = None
+                    if ProgressBarLogger is not None:
+                        class TkMergeLogger(ProgressBarLogger):
+                            def __init__(self, cb):
+                                super().__init__()
+                                self._cb = cb
+                            def callback(self, **changes):
+                                try:
+                                    tbar = self.state.get('bars', {}).get('t')
+                                    if tbar and tbar.get('total'):
+                                        idx = tbar.get('index') or 0
+                                        total = tbar.get('total') or 1
+                                        elapsed = tbar.get('elapsed') or 0
+                                        eta = tbar.get('eta') or 0
+                                        pct = (idx / total) * 100.0
+                                        self._cb(pct, elapsed, eta)
+                                except Exception:
+                                    pass
+                        logger_obj = TkMergeLogger(on_progress)
+
+                    self.log("💾 Escrevendo arquivo de saída (libx264/aac)...")
+                    write_kwargs = dict(codec='libx264', audio_codec='aac')
+                    try:
+                        # logger_obj pode ser None; o MoviePy aceita None
+                        final.write_videofile(output_path, logger=logger_obj, verbose=False, **write_kwargs)
+                    except Exception as e:
+                        # Tentar novamente sem logger e verbose
+                        self.log(f"Tentativa com logger falhou: {e}. Repetindo sem logger...", "WARNING")
+                        final.write_videofile(output_path, **write_kwargs)
+
+                    # Fechamento cuidadoso
+                    try:
+                        final.close()
+                    except Exception:
+                        pass
+                    for c in clips:
+                        try:
+                            c.close()
+                        except Exception:
+                            pass
+
+                    shutil.rmtree(work_dir, ignore_errors=True)
+
+                    self.root.after(0, lambda: [
+                        self.batch_progress.config(value=100),
+                        self.batch_progress_label.config(text="Unindo vídeos: 100%"),
+                        self.batch_status_label.config(text="✅ Vídeo unido salvo com sucesso"),
+                        messagebox.showinfo("Sucesso", f"Vídeo salvo em:\n{output_path}")
+                    ])
+                except ImportError:
+                    self.root.after(0, lambda: [
+                        self.batch_status_label.config(text="❌ Dependência ausente (moviepy)"),
+                        messagebox.showerror("Erro", "Dependência ausente: moviepy. Instale as dependências e tente novamente.")
+                    ])
+                except Exception as e:
+                    shutil.rmtree(work_dir, ignore_errors=True)
+                    self.root.after(0, lambda: [
+                        self.batch_status_label.config(text="❌ Erro ao unir vídeos"),
+                        messagebox.showerror("Erro", f"Erro ao unir vídeos: {e}")
+                    ])
+
+            thread = threading.Thread(target=_worker_merge, args=(collected_files, out_path, temp_dir), daemon=True)
+            thread.start()
+            self.log(f"🚀 Thread de união iniciada: {thread.name}")
+        except Exception as e:
+            try:
+                shutil.rmtree(temp_dir, ignore_errors=True)
+            except Exception:
+                pass
+            self.log(f"❌ Erro ao iniciar união de vídeos: {e}", "ERROR")
+            messagebox.showerror("Erro", f"Erro ao iniciar união de vídeos: {e}")
+
     def update_batch_ui(self):
         """Atualiza interface do lote periodicamente"""
         try:
@@ -1443,6 +1821,13 @@ class VideoGeneratorApp:
                     self.batch_status_label.config(text="Pronto para processar")
                     
                 # Forçar atualização da interface
+                # Habilitar/desabilitar botão "Limpar Lista de Prompts" conforme estado
+                try:
+                    if hasattr(self, 'clear_prompt_list_button'):
+                        should_disable = self.batch_processing or self.thread_pool.get_active_count() > 0
+                        self.clear_prompt_list_button.config(state=("disabled" if should_disable else "normal"))
+                except Exception:
+                    pass
                 self.root.update_idletasks()
                 
         except Exception as e:
