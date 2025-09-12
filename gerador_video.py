@@ -1321,7 +1321,20 @@ class VideoGeneratorApp:
                 try:
                     if attempt > 0:
                         self.log(f"🔄 [{thread_name}] Tentativa {attempt + 1}/{max_retries + 1} para prompt {prompt_id}")
-                        time.sleep(config.RETRY_DELAY * attempt)
+                        # Aguardar delay configurado antes de nova tentativa
+                        try:
+                            delay_between_attempts = float(getattr(self.batch_config, 'request_delay', 0.0))
+                        except Exception:
+                            delay_between_attempts = 0.0
+                        if delay_between_attempts and delay_between_attempts > 0:
+                            self.log(f"⏳ [{thread_name}] Aguardando {delay_between_attempts:.2f}s antes da próxima tentativa")
+                            time.sleep(delay_between_attempts)
+                        else:
+                            # Fallback: manter backoff baseado em RETRY_DELAY
+                            fallback = max(0.0, float(getattr(config, 'RETRY_DELAY', 1.0)) * attempt)
+                            if fallback > 0:
+                                self.log(f"⏳ [{thread_name}] Aguardando {fallback:.2f}s (fallback) antes da próxima tentativa")
+                                time.sleep(fallback)
                     
                     response = requests.post(
                         endpoint,
@@ -1331,8 +1344,18 @@ class VideoGeneratorApp:
                     )
                     
                     processing_time = time.time() - start_time
-                    self.log(f"⏱️ [{thread_name}] Prompt {prompt_id} processado em {processing_time:.2f}s")
-                    break
+                    status_code = response.status_code
+                    if status_code in [200, 201]:
+                        self.log(f"⏱️ [{thread_name}] Prompt {prompt_id} processado em {processing_time:.2f}s")
+                        break
+                    else:
+                        # HTTP não-sucesso: decidir se é caso de retry
+                        retryable = (status_code == 429) or (500 <= status_code < 600)
+                        if retryable and attempt < max_retries:
+                            self.log(f"⚠️ [{thread_name}] HTTP {status_code} na tentativa {attempt + 1}, reintentando...", "WARNING")
+                            continue
+                        # Não retryable ou esgotou tentativas: sair do loop para tratamento padrão
+                        break
                     
                 except requests.exceptions.Timeout:
                     if attempt < max_retries:
