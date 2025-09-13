@@ -504,6 +504,11 @@ class VideoGeneratorApp:
         self.tree_menu.add_command(label="Remover Prompt", command=self.remove_selected_prompt)
         self.tree_menu.add_command(label="Abrir URL", command=self.open_selected_url)
         self.tree_menu.add_command(label="Copiar URL", command=self.copy_selected_url)
+        # Novas ações: editar e reprocessar
+        self.tree_menu.add_separator()
+        self.tree_menu.add_command(label="Editar Prompt...", command=self.edit_selected_prompt)
+        self.tree_menu.add_command(label="Tentar Novamente", command=self.retry_selected_prompt)
+        self.tree_menu.add_command(label="Editar e Tentar Novamente...", command=self.edit_and_retry_selected_prompt)
         
         self.prompts_tree.bind("<Button-3>", self.show_tree_menu)
         
@@ -1311,6 +1316,176 @@ class VideoGeneratorApp:
                 return
         
         messagebox.showwarning("Aviso", "Nenhuma URL disponível para este prompt")
+
+    # --- Novas ações: editar e reprocessar ---
+    def _get_selected_prompt_id(self):
+        selection = self.prompts_tree.selection()
+        if not selection:
+            return None
+        item = selection[0]
+        values = self.prompts_tree.item(item)['values']
+        if not values:
+            return None
+        return values[1]
+
+    def edit_selected_prompt(self):
+        prompt_id = self._get_selected_prompt_id()
+        if not prompt_id:
+            return
+        prompt = self.prompt_manager.find_prompt(prompt_id)
+        if not prompt:
+            messagebox.showerror("Erro", "Prompt não encontrado")
+            return
+        if prompt.status == PromptStatus.PROCESSING:
+            messagebox.showwarning("Indisponível", "Não é possível editar enquanto está processando.")
+            return
+        
+        def on_save(new_text, new_lang, do_retry=False):
+            updated = self.prompt_manager.update_prompt(prompt_id, new_text, new_lang)
+            if not updated:
+                messagebox.showerror("Erro", "Falha ao atualizar prompt")
+                return
+            if do_retry:
+                if not self.prompt_manager.reset_for_retry(prompt_id):
+                    messagebox.showwarning("Aviso", "Não foi possível preparar para nova tentativa.")
+                else:
+                    if getattr(self, 'batch_processing', False):
+                        try:
+                            self.progress_tracker.add_to_total(1)
+                        except Exception:
+                            pass
+            self.schedule_tree_update()
+            if do_retry:
+                if getattr(self, 'batch_processing', False):
+                    try:
+                        self.dispatch_pending_prompts()
+                    except Exception:
+                        pass
+                else:
+                    if messagebox.askyesno("Iniciar", "Deseja iniciar o processamento agora?"):
+                        self.start_batch_processing()
+            messagebox.showinfo("Sucesso", "Prompt atualizado" + (" e reprocessamento iniciado." if do_retry else "."))
+        
+        self._open_edit_prompt_dialog(prompt, on_save, allow_retry=False)
+
+    def retry_selected_prompt(self):
+        prompt_id = self._get_selected_prompt_id()
+        if not prompt_id:
+            return
+        prompt = self.prompt_manager.find_prompt(prompt_id)
+        if not prompt:
+            messagebox.showerror("Erro", "Prompt não encontrado")
+            return
+        if prompt.status == PromptStatus.PROCESSING:
+            messagebox.showwarning("Indisponível", "Este prompt já está processando.")
+            return
+        
+        if not self.prompt_manager.reset_for_retry(prompt_id):
+            messagebox.showwarning("Aviso", "Não foi possível preparar para nova tentativa.")
+            return
+        
+        self.schedule_tree_update()
+        if getattr(self, 'batch_processing', False):
+            try:
+                self.progress_tracker.add_to_total(1)
+            except Exception:
+                pass
+            try:
+                self.dispatch_pending_prompts()
+            except Exception:
+                pass
+            messagebox.showinfo("Reprocessando", "Prompt reenfileirado para processamento.")
+        else:
+            if messagebox.askyesno("Iniciar", "Deseja iniciar o processamento agora?"):
+                self.start_batch_processing()
+
+    def edit_and_retry_selected_prompt(self):
+        prompt_id = self._get_selected_prompt_id()
+        if not prompt_id:
+            return
+        prompt = self.prompt_manager.find_prompt(prompt_id)
+        if not prompt:
+            messagebox.showerror("Erro", "Prompt não encontrado")
+            return
+        if prompt.status == PromptStatus.PROCESSING:
+            messagebox.showwarning("Indisponível", "Não é possível editar enquanto está processando.")
+            return
+        
+        def on_save(new_text, new_lang, do_retry=True):
+            updated = self.prompt_manager.update_prompt(prompt_id, new_text, new_lang)
+            if not updated:
+                messagebox.showerror("Erro", "Falha ao atualizar prompt")
+                return
+            if do_retry:
+                if not self.prompt_manager.reset_for_retry(prompt_id):
+                    messagebox.showwarning("Aviso", "Não foi possível preparar para nova tentativa.")
+                else:
+                    if getattr(self, 'batch_processing', False):
+                        try:
+                            self.progress_tracker.add_to_total(1)
+                        except Exception:
+                            pass
+            self.schedule_tree_update()
+            if do_retry:
+                if getattr(self, 'batch_processing', False):
+                    try:
+                        self.dispatch_pending_prompts()
+                    except Exception:
+                        pass
+                else:
+                    if messagebox.askyesno("Iniciar", "Deseja iniciar o processamento agora?"):
+                        self.start_batch_processing()
+            messagebox.showinfo("Sucesso", "Prompt atualizado e reenfileirado para processamento.")
+        
+        self._open_edit_prompt_dialog(prompt, on_save, allow_retry=True)
+
+    def _open_edit_prompt_dialog(self, prompt_item, on_save, allow_retry: bool):
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Editar Prompt")
+        dialog.transient(self.root)
+        dialog.grab_set()
+        dialog.geometry("500x350")
+        
+        # Prompt text
+        ttk.Label(dialog, text="Prompt:").pack(anchor="w", padx=10, pady=(10, 2))
+        text_widget = scrolledtext.ScrolledText(dialog, height=8)
+        text_widget.pack(fill="both", expand=True, padx=10)
+        text_widget.insert("1.0", prompt_item.prompt_text)
+        
+        # Language combobox
+        ttk.Label(dialog, text="Idioma:").pack(anchor="w", padx=10, pady=(10, 2))
+        lang_var = tk.StringVar(value=prompt_item.language)
+        try:
+            langs = list(getattr(config, 'SUPPORTED_LANGUAGES', [prompt_item.language]))
+        except Exception:
+            langs = [prompt_item.language]
+        lang_combo = ttk.Combobox(dialog, textvariable=lang_var, values=langs, state="readonly")
+        lang_combo.pack(fill="x", padx=10)
+        
+        # Retry checkbox (opcional)
+        retry_var = tk.BooleanVar(value=allow_retry)
+        if allow_retry:
+            retry_check = ttk.Checkbutton(dialog, text="Tentar novamente após salvar", variable=retry_var)
+            retry_check.pack(anchor="w", padx=10, pady=(8, 0))
+        
+        # Buttons
+        btns = ttk.Frame(dialog)
+        btns.pack(fill="x", pady=10)
+        
+        def _on_confirm():
+            new_text = text_widget.get("1.0", tk.END).strip()
+            new_lang = lang_var.get().strip() or prompt_item.language
+            if not new_text:
+                messagebox.showwarning("Aviso", "O texto do prompt não pode estar vazio.")
+                return
+            try:
+                on_save(new_text, new_lang, retry_var.get() if allow_retry else False)
+                dialog.destroy()
+            except Exception as e:
+                messagebox.showerror("Erro", f"Falha ao salvar: {e}")
+        
+        ttk.Button(btns, text="Cancelar", command=dialog.destroy).pack(side="right", padx=(0, 10))
+        ttk.Button(btns, text="Salvar", command=_on_confirm).pack(side="right", padx=10)
     
     def start_batch_processing(self):
         """Inicia processamento em lote"""

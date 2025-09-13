@@ -138,6 +138,45 @@ class PromptManager:
                     del self.prompts[i]
                     return True
             return False
+
+    # --- Novos utilitários para edição e retry ---
+    def find_prompt(self, prompt_id: str) -> Optional[PromptItem]:
+        """Retorna o PromptItem correspondente ao ID (ou None)."""
+        with self._lock:
+            for p in self.prompts:
+                if p.id == prompt_id:
+                    return p
+            return None
+
+    def update_prompt(self, prompt_id: str, new_text: Optional[str] = None, new_language: Optional[str] = None) -> bool:
+        """Atualiza texto e/ou idioma de um prompt existente mantendo posição e ID."""
+        with self._lock:
+            for p in self.prompts:
+                if p.id == prompt_id:
+                    if new_text is not None:
+                        p.prompt_text = new_text
+                    if new_language is not None:
+                        p.language = new_language
+                    return True
+            return False
+
+    def reset_for_retry(self, prompt_id: str) -> bool:
+        """Reseta campos do prompt para nova tentativa, preservando a numeração (posição)."""
+        with self._lock:
+            for p in self.prompts:
+                if p.id == prompt_id:
+                    if p.status == PromptStatus.PROCESSING:
+                        # Não permitir reset durante processamento
+                        return False
+                    p.status = PromptStatus.PENDING
+                    p.started_at = None
+                    p.completed_at = None
+                    p.error_message = None
+                    # Mantém video_url antigo? Vamos limpar para refletir o novo resultado quando concluir novamente
+                    p.video_url = None
+                    p.retry_count = (p.retry_count or 0) + 1
+                    return True
+            return False
     
     def update_prompt_status(self, prompt_id: str, status: PromptStatus, 
                            video_url: Optional[str] = None, 
