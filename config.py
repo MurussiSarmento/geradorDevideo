@@ -29,7 +29,12 @@ MEMORY_MONITORING = True  # monitorar uso de memória
 
 # URLs e Endpoints
 WEBHOOK_URL = "https://n8n.srv943626.hstgr.cloud/webhook/9a20b730-2fd6-4d92-9c62-3e7c288e241b"
+# Endpoint específico para geração vertical 9:16 (Reels Premium)
+REELS_WEBHOOK_URL = "https://n8n.srv943626.hstgr.cloud/webhook/testevetareelspremium"
 DEFAULT_PRESENTER_URL = "https://create-images-results.d-id.com/DefaultPresenters/Noelle_f/image.jpeg"
+
+# Endpoint do provedor Gemini (defina seu webhook/endpoint aqui; deixe vazio se não usar)
+GEMINI_WEBHOOK_URL = ""  # ex.: "https://seu-servidor.com/webhook/gemini-video"
 
 # Configurações de Arquivos
 BATCH_VIDEOS_FOLDER = "batch_videos"
@@ -39,9 +44,17 @@ MAX_PROMPTS_PER_BATCH = 50
 # Headers HTTP padrão
 DEFAULT_HEADERS = {
     "Content-Type": "application/json",
+    "Origin": "https://vetaia.cloud",
     "Referer": "https://vetaia.cloud/",
     "sec-ch-ua": '"Not;A=Brand";v="99", "Google Chrome";v="139", "Chromium";v="139"',
     "sec-ch-ua-mobile": "?0",
     "sec-ch-ua-platform": '"Windows"',
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36"
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36",
+    "Accept": "*/*"
+}
+
+# Headers para o provedor Gemini (mínimos e neutros)
+GEMINI_HEADERS = {
+    "Content-Type": "application/json",
+    "Accept": "application/json"
 }

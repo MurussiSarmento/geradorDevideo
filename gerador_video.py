@@ -203,35 +203,59 @@ class VideoGeneratorApp:
         api_key = self.api_key_entry.get().strip()
         token = self.token_entry.get().strip()
         
-        if not api_key or not token:
-            self.log("❌ API Key e Token são necessários para teste", "ERROR")
-            messagebox.showerror("Erro", "Preencha API Key e Token primeiro")
-            return
-        
-        # Seleciona endpoint e payload conforme formato 16:9 ou 9:16
-        use_reels = hasattr(self, 'aspect_var') and self.aspect_var.get() == '9:16'
-        endpoint = config.REELS_WEBHOOK_URL if use_reels else config.WEBHOOK_URL
+        provider = self.provider_var.get() if hasattr(self, 'provider_var') else 'Veta'
+        self.log(f"🏷️ Provedor selecionado: {provider}")
 
-        test_data = {
-            "prompt": "Hello, this is a test",
-            "api_key": api_key,
-            "languages": ["en"],
-            "auth_token": token
-        }
-        if not use_reels:
-            test_data["token"] = token
+        # Seleciona endpoint/headers/payload conforme provedor
+        if provider == "Gemini":
+            if not api_key:
+                self.log("❌ API Key é necessária para testar a Gemini API", "ERROR")
+                messagebox.showerror("Erro", "Informe a sua Gemini API Key para testar a conexão")
+                return
+            endpoint = "https://generativelanguage.googleapis.com/v1beta/models"
+            headers = {
+                "Accept": "application/json",
+                "x-goog-api-key": api_key,
+            }
+            test_data = None
+        else:
+            # Veta (atual)
+            if not api_key or not token:
+                self.log("❌ API Key e Token são necessários para teste", "ERROR")
+                messagebox.showerror("Erro", "Preencha API Key e Token primeiro")
+                return
+            use_reels = hasattr(self, 'aspect_var') and self.aspect_var.get() == '9:16'
+            endpoint = config.REELS_WEBHOOK_URL if use_reels else config.WEBHOOK_URL
+            headers = config.DEFAULT_HEADERS
+            test_data = {
+                "prompt": "Hello, this is a test",
+                "api_key": api_key,
+                "languages": ["en"],
+                "auth_token": token
+            }
+            if not use_reels:
+                test_data["token"] = token
         
         def test_in_thread():
             try:
                 self.log("🚀 Enviando requisição de teste...")
-                self.log(f"📐 Formato: {'9:16 (REELS)' if use_reels else '16:9'}")
-                self.log(f"🔗 Endpoint de teste: {endpoint}")
-                response = requests.post(
-                    endpoint,
-                    headers=config.DEFAULT_HEADERS,
-                    data=json.dumps(test_data),
-                    timeout=config.REQUEST_TIMEOUT
-                )
+                if provider == "Gemini":
+                    self.log("📐 Formato: N/A (Gemini)")
+                    self.log(f"🔗 Endpoint de teste: {endpoint}")
+                    response = requests.get(
+                        endpoint,
+                        headers=headers,
+                        timeout=config.REQUEST_TIMEOUT
+                    )
+                else:
+                    self.log(f"📐 Formato: {'9:16 (REELS)' if use_reels else '16:9'}")
+                    self.log(f"🔗 Endpoint de teste: {endpoint}")
+                    response = requests.post(
+                        endpoint,
+                        headers=headers,
+                        data=json.dumps(test_data),
+                        timeout=config.REQUEST_TIMEOUT
+                    )
                 
                 self.log(f"📨 Status da resposta: {response.status_code}")
                 self.log(f"📊 Tamanho da resposta: {len(response.content)} bytes")
@@ -299,44 +323,51 @@ class VideoGeneratorApp:
         main_frame = ttk.Frame(parent, padding="10")
         main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         
+        # Provedor
+        ttk.Label(main_frame, text="Provedor:").grid(row=0, column=0, sticky=tk.W, pady=5)
+        self.provider_var = tk.StringVar(value="Veta")
+        provider_combo = ttk.Combobox(main_frame, textvariable=self.provider_var, 
+                                    values=["Veta", "Gemini"], state="readonly")
+        provider_combo.grid(row=0, column=1, sticky=tk.W, pady=5)
+        
         # API Key
-        ttk.Label(main_frame, text="API Key:").grid(row=0, column=0, sticky=tk.W, pady=5)
+        ttk.Label(main_frame, text="API Key:").grid(row=1, column=0, sticky=tk.W, pady=5)
         self.api_key_entry = ttk.Entry(main_frame, width=50, show="*")
-        self.api_key_entry.grid(row=0, column=1, columnspan=2, sticky=(tk.W, tk.E), pady=5)
+        self.api_key_entry.grid(row=1, column=1, columnspan=2, sticky=(tk.W, tk.E), pady=5)
         
         # Token
-        ttk.Label(main_frame, text="Token:").grid(row=1, column=0, sticky=tk.W, pady=5)
+        ttk.Label(main_frame, text="Token:").grid(row=2, column=0, sticky=tk.W, pady=5)
         self.token_entry = ttk.Entry(main_frame, width=50, show="*")
-        self.token_entry.grid(row=1, column=1, columnspan=2, sticky=(tk.W, tk.E), pady=5)
+        self.token_entry.grid(row=2, column=1, columnspan=2, sticky=(tk.W, tk.E), pady=5)
         
         # Prompt
-        ttk.Label(main_frame, text="Prompt:").grid(row=2, column=0, sticky=(tk.W, tk.N), pady=5)
+        ttk.Label(main_frame, text="Prompt:").grid(row=3, column=0, sticky=(tk.W, tk.N), pady=5)
         self.prompt_text = scrolledtext.ScrolledText(main_frame, width=50, height=8)
-        self.prompt_text.grid(row=2, column=1, columnspan=2, sticky=(tk.W, tk.E), pady=5)
+        self.prompt_text.grid(row=3, column=1, columnspan=2, sticky=(tk.W, tk.E), pady=5)
         
         # Idioma
-        ttk.Label(main_frame, text="Idioma:").grid(row=3, column=0, sticky=tk.W, pady=5)
+        ttk.Label(main_frame, text="Idioma:").grid(row=4, column=0, sticky=tk.W, pady=5)
         self.language_var = tk.StringVar(value="pt")
         language_combo = ttk.Combobox(main_frame, textvariable=self.language_var, 
                                     values=["pt", "en", "es", "fr", "de", "it"], state="readonly")
-        language_combo.grid(row=3, column=1, sticky=tk.W, pady=5)
+        language_combo.grid(row=4, column=1, sticky=tk.W, pady=5)
         
         # Botão Gerar
         self.generate_button = ttk.Button(main_frame, text="Gerar Vídeo", command=self.generate_video)
-        self.generate_button.grid(row=4, column=0, columnspan=3, pady=20)
+        self.generate_button.grid(row=5, column=0, columnspan=3, pady=20)
         
         # Status
-        ttk.Label(main_frame, text="Status:").grid(row=5, column=0, sticky=tk.W, pady=5)
+        ttk.Label(main_frame, text="Status:").grid(row=6, column=0, sticky=tk.W, pady=5)
         self.status_label = ttk.Label(main_frame, text="Pronto para gerar vídeo", foreground="green")
-        self.status_label.grid(row=5, column=1, columnspan=2, sticky=tk.W, pady=5)
+        self.status_label.grid(row=6, column=1, columnspan=2, sticky=tk.W, pady=5)
         
         # Progress bar
         self.progress = ttk.Progressbar(main_frame, mode='indeterminate')
-        self.progress.grid(row=6, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=10)
+        self.progress.grid(row=7, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=10)
         
         # Frame para botões do vídeo
         video_frame = ttk.Frame(main_frame)
-        video_frame.grid(row=7, column=0, columnspan=3, pady=10)
+        video_frame.grid(row=8, column=0, columnspan=3, pady=10)
         
         self.open_button = ttk.Button(video_frame, text="Abrir no Navegador", 
                                     command=self.open_in_browser, state="disabled")
@@ -347,13 +378,13 @@ class VideoGeneratorApp:
         self.download_button.grid(row=0, column=1, padx=5)
         
         # URL do vídeo
-        ttk.Label(main_frame, text="URL do Vídeo:").grid(row=8, column=0, sticky=tk.W, pady=5)
+        ttk.Label(main_frame, text="URL do Vídeo:").grid(row=9, column=0, sticky=tk.W, pady=5)
         self.url_text = scrolledtext.ScrolledText(main_frame, width=50, height=3)
-        self.url_text.grid(row=8, column=1, columnspan=2, sticky=(tk.W, tk.E), pady=5)
+        self.url_text.grid(row=9, column=1, columnspan=2, sticky=(tk.W, tk.E), pady=5)
         
         # Frame para preview do vídeo
         preview_frame = ttk.LabelFrame(main_frame, text="Preview do Vídeo", padding="10")
-        preview_frame.grid(row=9, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=10)
+        preview_frame.grid(row=10, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=10)
         
         self.video_info_label = ttk.Label(preview_frame, text="Nenhum vídeo carregado")
         self.video_info_label.grid(row=0, column=0, columnspan=2, pady=5)
@@ -437,16 +468,18 @@ class VideoGeneratorApp:
         list_frame.pack(fill="both", expand=True, pady=(0, 10))
         
         # Treeview para mostrar prompts
-        columns = ("ID", "Prompt", "Idioma", "Status", "URL")
+        columns = ("N", "ID", "Prompt", "Idioma", "Status", "URL")
         self.prompts_tree = ttk.Treeview(list_frame, columns=columns, show="headings", height=8)
         
         # Configurar colunas
+        self.prompts_tree.heading("N", text="#")
         self.prompts_tree.heading("ID", text="ID")
         self.prompts_tree.heading("Prompt", text="Prompt")
         self.prompts_tree.heading("Idioma", text="Idioma")
         self.prompts_tree.heading("Status", text="Status")
         self.prompts_tree.heading("URL", text="URL do Vídeo")
         
+        self.prompts_tree.column("N", width=40, anchor="center")
         self.prompts_tree.column("ID", width=80)
         self.prompts_tree.column("Prompt", width=300)
         self.prompts_tree.column("Idioma", width=80)
@@ -571,36 +604,120 @@ class VideoGeneratorApp:
         self.log(f"📡 [{thread_name}] Iniciando envio de requisição...")
         
         try:
-            headers = dict(config.DEFAULT_HEADERS)
-            
-            self.log(f"🔧 [{thread_name}] Headers configurados")
-            
-            # Selecionar endpoint conforme formato 16:9 ou 9:16
-            use_reels = hasattr(self, 'aspect_var') and self.aspect_var.get() == '9:16'
-            endpoint = config.REELS_WEBHOOK_URL if use_reels else config.WEBHOOK_URL
-            
-            # Preparar dados para enviar ao webhook
-            if use_reels:
-                webhook_data = {
-                    "prompt": data.get("script", {}).get("input", ""),
-                    "api_key": self.api_key_entry.get().strip(),
-                    "languages": [self.language_var.get()],
-                    "auth_token": self.token_entry.get().strip()
+            provider = self.provider_var.get() if hasattr(self, 'provider_var') else 'Veta'
+            self.log(f"🏷️ [{thread_name}] Provedor: {provider}")
+
+            if provider == "Gemini":
+                # Chamada direta à Gemini API (Veo 3 - Long Running Operation)
+                api_key = self.api_key_entry.get().strip()
+                if not api_key:
+                    self.log(f"⚠️ [{thread_name}] Gemini API Key não informada", "WARNING")
+                    self.update_status("Informe sua Gemini API Key para continuar")
+                    return
+                prompt_text = data.get("script", {}).get("input", "").strip()
+                if not prompt_text:
+                    self.update_status("Prompt vazio. Nada para enviar.")
+                    return
+                headers = {
+                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                    "x-goog-api-key": api_key,
                 }
+                start_endpoint = "https://generativelanguage.googleapis.com/v1beta/models/veo-3.0-generate-001:predictLongRunning"
+                payload = {
+                    "instances": [
+                        {"prompt": prompt_text}
+                    ]
+                }
+                self.log(f"📤 [{thread_name}] Iniciando operação Veo 3 (predictLongRunning)...")
+                self.log(f"🔗 URL: {start_endpoint}")
+                self.log(f"📦 Payload size: {len(json.dumps(payload))} bytes")
+                start_time = time.time()
+                start_resp = requests.post(start_endpoint, headers=headers, data=json.dumps(payload), timeout=config.REQUEST_TIMEOUT)
+                elapsed = time.time() - start_time
+                self.log(f"⏱️ [{thread_name}] Requisição de início concluída em {elapsed:.2f}s")
+                if start_resp.status_code not in (200, 201):
+                    self.log(f"❌ [{thread_name}] Erro ao iniciar operação: {start_resp.status_code} - {start_resp.text[:300]}", "ERROR")
+                    self.update_status("Falha ao iniciar geração de vídeo na Gemini API")
+                    return
+                op = start_resp.json()
+                op_name = op.get("name") or op.get("operation")
+                if not op_name:
+                    self.log(f"❌ [{thread_name}] Resposta sem nome de operação: {op}", "ERROR")
+                    self.update_status("Resposta inválida da Gemini API (sem operação)")
+                    return
+                self.log(f"🆔 [{thread_name}] Operação: {op_name}")
+                poll_url = op_name
+                if not poll_url.startswith("http"):
+                    poll_url = f"https://generativelanguage.googleapis.com/v1beta/{op_name.lstrip('/')}"
+                self.update_status("Aguardando geração do vídeo (Gemini)...")
+                while True:
+                    time.sleep(8)
+                    self.log(f"🔄 [{thread_name}] Polling operação...")
+                    poll_resp = requests.get(poll_url, headers={"Accept": "application/json", "x-goog-api-key": api_key}, timeout=config.REQUEST_TIMEOUT)
+                    if poll_resp.status_code != 200:
+                        self.log(f"⚠️ [{thread_name}] Falha no polling: {poll_resp.status_code} - {poll_resp.text[:200]}", "WARNING")
+                        continue
+                    op_state = poll_resp.json()
+                    if op_state.get("done") is True:
+                        self.log(f"✅ [{thread_name}] Operação concluída")
+                        if op_state.get("error"):
+                            self.log(f"❌ [{thread_name}] Erro na operação: {op_state.get('error')}", "ERROR")
+                            self.update_status("A geração falhou na Gemini API")
+                            return
+                        resp = op_state.get("response") or {}
+                        video_uri = None
+                        try:
+                            gen = resp.get("generated_videos") or []
+                            if gen:
+                                vid_obj = gen[0].get("video") or {}
+                                video_uri = vid_obj.get("uri") or vid_obj.get("videoUri")
+                                if not video_uri and isinstance(vid_obj, dict):
+                                    inner = vid_obj.get("video") or {}
+                                    if isinstance(inner, dict):
+                                        video_uri = inner.get("uri") or inner.get("videoUri")
+                        except Exception:
+                            video_uri = None
+                        if not video_uri:
+                            self.log(f"❓ [{thread_name}] Não foi possível extrair a URI do vídeo: {json.dumps(op_state)[:400]}", "WARNING")
+                            self.update_status("Geração concluída, mas não encontrei a URI do vídeo")
+                            return
+                        self.log(f"🎯 [{thread_name}] URI do vídeo obtida: {video_uri}")
+                        self.video_url = video_uri
+                        self.update_video_info(self.video_url)
+                        self.update_status("Vídeo gerado com sucesso (Gemini)!")
+                        return
+                    else:
+                        self.update_status("Processando vídeo na Gemini API... (aguarde)")
             else:
-                webhook_data = {
-                    "prompt": data.get("script", {}).get("input", ""),
-                    "api_key": self.api_key_entry.get().strip(),
-                    "token": self.token_entry.get().strip(),
-                    "languages": [self.language_var.get()],
-                    "auth_token": self.token_entry.get().strip()
-                }
+                headers = dict(config.DEFAULT_HEADERS)
+                # Selecionar endpoint conforme formato 16:9 ou 9:16
+                use_reels = hasattr(self, 'aspect_var') and self.aspect_var.get() == '9:16'
+                endpoint = config.REELS_WEBHOOK_URL if use_reels else config.WEBHOOK_URL
+                # Preparar dados para enviar ao webhook (Veta)
+                if use_reels:
+                    webhook_data = {
+                        "prompt": data.get("script", {}).get("input", ""),
+                        "api_key": self.api_key_entry.get().strip(),
+                        "languages": [self.language_var.get()],
+                        "auth_token": self.token_entry.get().strip()
+                    }
+                else:
+                    webhook_data = {
+                        "prompt": data.get("script", {}).get("input", ""),
+                        "api_key": self.api_key_entry.get().strip(),
+                        "token": self.token_entry.get().strip(),
+                        "languages": [self.language_var.get()],
+                        "auth_token": self.token_entry.get().strip()
+                    }
             
             # Log detalhado da requisição
             self.log(f"📤 [{thread_name}] Preparando POST para webhook...")
             self.log(f"🔗 URL: {endpoint}")
             self.log(f"📦 Payload size: {len(json.dumps(webhook_data))} bytes")
             self.log(f"🌐 Language: {webhook_data.get('languages', ['unknown'])}")
+            if provider != "Gemini":
+                self.log(f"📐 [{thread_name}] Formato: {'9:16 (REELS)' if use_reels else '16:9'}")
             
             # Fazer a requisição POST para o webhook
             self.log(f"🚀 [{thread_name}] Enviando requisição...")
@@ -798,7 +915,17 @@ class VideoGeneratorApp:
     def _download_file(self, url, file_path):
         """Baixa o arquivo em thread separada"""
         try:
-            response = requests.get(url, stream=True)
+            # Incluir API key para downloads da Gemini Files API quando necessário
+            headers = {}
+            try:
+                if url.startswith("https://generativelanguage.googleapis.com") or "ai.googleusercontent.com" in url or "googleapis.com" in url:
+                    api_key = self.api_key_entry.get().strip()
+                    if api_key:
+                        headers["x-goog-api-key"] = api_key
+            except Exception:
+                pass
+
+            response = requests.get(url, stream=True, headers=headers if headers else None)
             response.raise_for_status()
             
             total_size = int(response.headers.get('content-length', 0))
@@ -1092,7 +1219,7 @@ class VideoGeneratorApp:
             self.prompts_tree.delete(item)
         
         # Adicionar prompts
-        for prompt in self.prompt_manager.get_all_prompts():
+        for idx, prompt in enumerate(self.prompt_manager.get_all_prompts(), start=1):
             # Truncar prompt se muito longo
             display_prompt = prompt.prompt_text[:50] + "..." if len(prompt.prompt_text) > 50 else prompt.prompt_text
             
@@ -1102,6 +1229,7 @@ class VideoGeneratorApp:
                 display_url = prompt.video_url[:30] + "..." if len(prompt.video_url) > 30 else prompt.video_url
             
             self.prompts_tree.insert("", "end", values=(
+                idx,
                 prompt.id,
                 display_prompt,
                 prompt.language,
@@ -1140,7 +1268,7 @@ class VideoGeneratorApp:
             return
         
         item = selection[0]
-        prompt_id = self.prompts_tree.item(item)['values'][0]
+        prompt_id = self.prompts_tree.item(item)['values'][1]
         
         if self.prompt_manager.remove_prompt(prompt_id):
             self.update_prompts_tree()
@@ -1154,7 +1282,7 @@ class VideoGeneratorApp:
         
         item = selection[0]
         values = self.prompts_tree.item(item)['values']
-        prompt_id = values[0]
+        prompt_id = values[1]
         
         # Buscar prompt completo
         for prompt in self.prompt_manager.get_all_prompts():
@@ -1172,7 +1300,7 @@ class VideoGeneratorApp:
         
         item = selection[0]
         values = self.prompts_tree.item(item)['values']
-        prompt_id = values[0]
+        prompt_id = values[1]
         
         # Buscar prompt completo
         for prompt in self.prompt_manager.get_all_prompts():
@@ -1455,14 +1583,21 @@ class VideoGeneratorApp:
             }
     
     def save_batch_video(self, response, prompt_id):
-        """Salva vídeo do lote automaticamente"""
+        """Salva vídeo do lote automaticamente com prefixo da ordem na lista (1_, 2_, 3_, ...)"""
         # Criar pasta de downloads se não existir
         download_folder = "batch_videos"
         if not os.path.exists(download_folder):
             os.makedirs(download_folder)
         
-        # Nome do arquivo
-        filename = f"video_{prompt_id}_{int(time.time())}.mp4"
+        # Determinar posição (ordem) do prompt na lista para prefixo
+        try:
+            order_index = next((idx for idx, p in enumerate(self.prompt_manager.get_all_prompts(), start=1) if p.id == prompt_id), 0)
+        except Exception:
+            order_index = 0
+        
+        # Nome do arquivo com prefixo
+        base_name = f"video_{prompt_id}_{int(time.time())}.mp4"
+        filename = f"{order_index}_{base_name}" if order_index else base_name
         file_path = os.path.join(download_folder, filename)
         
         # Salvar arquivo

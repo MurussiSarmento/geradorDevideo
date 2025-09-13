@@ -49,7 +49,8 @@ class BatchConfiguration:
     """Configurações para processamento em lote"""
     max_threads: int = 2
     default_language: str = 'pt'
-    request_delay: float = 0.5
+    # Delay opcional entre submissões (segundos). 0.0 = sem atraso
+    request_delay: float = 0.0
     request_timeout: int = 300
     max_retries: int = 2
     auto_download: bool = False
