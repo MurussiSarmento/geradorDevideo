@@ -115,6 +115,11 @@ class VideoGeneratorApp:
         
         # Iniciar timer de atualização da UI
         self.schedule_ui_update()
+        
+        # Iniciar ciclo de atualização do lote (apenas uma vez)
+        if not hasattr(self, '_update_batch_ui_started'):
+            self._update_batch_ui_started = True
+            self.root.after(self.ui_update_interval, self.update_batch_ui)
     
     def setup_logs_tab(self, parent):
         """Configura aba de logs"""
@@ -315,8 +320,7 @@ class VideoGeneratorApp:
             # Não logar erros de atualização para evitar loop
             pass
         
-        # Iniciar timer de atualização da interface do lote após tudo estar criado
-        self.root.after(1000, self.update_batch_ui)
+        # Agendamento do update_batch_ui é feito uma única vez em setup_ui
     
     def setup_individual_tab(self, parent):
         # Frame principal
@@ -2260,6 +2264,11 @@ class VideoGeneratorApp:
 
     def update_batch_ui(self):
         """Atualiza interface do lote periodicamente"""
+        # Evitar reentrância/overlap caso timers se sobreponham
+        if getattr(self, '_update_batch_ui_executing', False):
+            self.root.after(self.ui_update_interval, self.update_batch_ui)
+            return
+        self._update_batch_ui_executing = True
         try:
             if hasattr(self, 'batch_progress'):
                 # Atualizar progresso
@@ -2323,9 +2332,10 @@ class VideoGeneratorApp:
         except Exception as e:
             # Log erro mas não interromper atualização
             self.log(f"⚠️ Erro na atualização da UI: {str(e)}", "WARNING")
-        
-        # Reagendar próxima atualização
-        self.root.after(self.ui_update_interval, self.update_batch_ui)
+        finally:
+            # Marcar como concluído e reagendar próxima atualização
+            self._update_batch_ui_executing = False
+            self.root.after(self.ui_update_interval, self.update_batch_ui)
 
 def main():
     root = tk.Tk()
