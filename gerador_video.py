@@ -8,6 +8,7 @@ import webbrowser
 import base64
 import os
 import logging
+from PIL import Image, ImageTk
 from datetime import datetime
 from urllib.parse import urlparse
 from batch_processor import (
@@ -93,6 +94,9 @@ class VideoGeneratorApp:
     def setup_ui(self):
         self.log("🔧 Configurando interface...")
         
+        # Header com logo e branding
+        self.setup_header()
+        
         # Notebook para abas
         notebook = ttk.Notebook(self.root)
         notebook.pack(fill="both", expand=True, padx=10, pady=10)
@@ -120,6 +124,49 @@ class VideoGeneratorApp:
         if not hasattr(self, '_update_batch_ui_started'):
             self._update_batch_ui_started = True
             self.root.after(self.ui_update_interval, self.update_batch_ui)
+    
+    def setup_header(self):
+        header = ttk.Frame(self.root)
+        header.pack(fill="x", padx=10, pady=(10, 0))
+
+        top_bar = ttk.Frame(header)
+        top_bar.pack(fill="x")
+
+        content = ttk.Frame(header)
+        content.pack(fill="x", pady=(8, 12))
+
+        logo_path_candidates = [
+            os.path.join(os.path.dirname(__file__), "assets", "logo.png"),
+            os.path.join(os.path.dirname(__file__), "logo.png"),
+            os.path.join(os.path.dirname(__file__), "logo.jpg")
+        ]
+        logo_img = None
+        for p in logo_path_candidates:
+            if os.path.exists(p):
+                try:
+                    img = Image.open(p)
+                    img.thumbnail((96, 96), Image.LANCZOS)
+                    logo_img = ImageTk.PhotoImage(img)
+                    self._logo_img_ref = logo_img
+                    break
+                except Exception:
+                    pass
+
+        content.grid_columnconfigure(1, weight=1)
+
+        if logo_img:
+            logo_lbl = ttk.Label(content, image=logo_img)
+            logo_lbl.grid(row=0, column=0, rowspan=2, sticky="w", padx=(0, 12))
+        else:
+            placeholder = ttk.Label(content, text="VEO3", font=("Segoe UI", 20, "bold"))
+            placeholder.grid(row=0, column=0, rowspan=2, sticky="w", padx=(0, 12))
+
+        title = ttk.Label(content, text="VEO3", font=("Segoe UI Semibold", 18))
+        subtitle = ttk.Label(content, text="AUTOMATIC VIDEO SEQUENCE", font=("Segoe UI", 10))
+        title.grid(row=0, column=1, sticky="w")
+        subtitle.grid(row=1, column=1, sticky="w")
+
+        ttk.Separator(self.root, orient="horizontal").pack(fill="x", padx=10, pady=(0, 8))
     
     def setup_logs_tab(self, parent):
         """Configura aba de logs"""
@@ -333,6 +380,47 @@ class VideoGeneratorApp:
         provider_combo = ttk.Combobox(main_frame, textvariable=self.provider_var, 
                                     values=["Veta", "Gemini"], state="readonly")
         provider_combo.grid(row=0, column=1, sticky=tk.W, pady=5)
+
+        # Links de ajuda ao lado do combobox quando apropriado
+        # Container para links
+        if not hasattr(self, 'provider_links_frame'):
+            self.provider_links_frame = ttk.Frame(main_frame)
+            self.provider_links_frame.grid(row=0, column=2, sticky=tk.W, padx=(10,0))
+        else:
+            # Limpar se já existir (reconfigurações)
+            for child in self.provider_links_frame.winfo_children():
+                child.destroy()
+
+        def render_provider_links(*_):
+            # Limpa links existentes
+            for child in self.provider_links_frame.winfo_children():
+                child.destroy()
+            current = self.provider_var.get()
+
+            # Link para assinar o Veta (sempre visível)
+            def open_veta():
+                try:
+                    webbrowser.open_new_tab("https://pay.kiwify.com.br/PaxY52r?afid=xWFfnFvw")
+                except Exception:
+                    pass
+            link_veta = ttk.Label(self.provider_links_frame, text="assine o veta", foreground="blue", cursor="hand2")
+            link_veta.bind("<Button-1>", lambda e: open_veta())
+            link_veta.grid(row=0, column=0, padx=(0,10))
+
+            # Link para gerar API do Gemini (apenas quando Gemini estiver selecionado)
+            if current == "Gemini":
+                def open_gemini_api():
+                    try:
+                        webbrowser.open_new_tab("https://aistudio.google.com/app/apikey")
+                    except Exception:
+                        pass
+                link_gemini = ttk.Label(self.provider_links_frame, text="Gerar API do Gemini", foreground="blue", cursor="hand2")
+                link_gemini.bind("<Button-1>", lambda e: open_gemini_api())
+                link_gemini.grid(row=0, column=1)
+
+        # Render inicial e bind de mudança
+        render_provider_links()
+        provider_combo.bind("<<ComboboxSelected>>", render_provider_links)
         
         # API Key
         ttk.Label(main_frame, text="API Key:").grid(row=1, column=0, sticky=tk.W, pady=5)
