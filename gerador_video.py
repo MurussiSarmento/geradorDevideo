@@ -17,6 +17,18 @@ from batch_processor import (
 )
 import config
 
+# Utilitário de normalização de idioma
+# Garante que valores como 'pt-br' sejam convertidos para 'pt'
+# (sem alterar outros idiomas existentes)
+def normalize_language(lang):
+    try:
+        s = str(lang).strip().lower()
+        if s in ("pt-br", "pt_br", "ptbr"):
+            return "pt"
+        return s if s else "pt"
+    except Exception:
+        return "pt"
+
 class VideoGeneratorApp:
     def __init__(self, root):
         self.root = root
@@ -441,7 +453,7 @@ class VideoGeneratorApp:
         ttk.Label(main_frame, text="Idioma:").grid(row=4, column=0, sticky=tk.W, pady=5)
         self.language_var = tk.StringVar(value="pt")
         language_combo = ttk.Combobox(main_frame, textvariable=self.language_var, 
-                                    values=["pt", "en", "es", "fr", "de", "it"], state="readonly")
+                                    values=["pt", "🇺🇸", "es", "jp"], state="readonly")
         language_combo.grid(row=4, column=1, sticky=tk.W, pady=5)
         
         # Botão Gerar
@@ -513,7 +525,7 @@ class VideoGeneratorApp:
         ttk.Label(config_frame, text="Idioma padrão:").grid(row=0, column=2, sticky=tk.W, padx=(20, 5), pady=5)
         self.batch_language_var = tk.StringVar(value="pt")
         batch_lang_combo = ttk.Combobox(config_frame, textvariable=self.batch_language_var, 
-                                       values=["pt", "en", "es", "fr", "de", "it"], state="readonly", width=10)
+                                       values=["pt", "🇺🇸", "es", "jp"], state="readonly", width=10)
         batch_lang_combo.grid(row=0, column=3, sticky=tk.W, pady=5)
 
         # Retries em caso de erro
@@ -539,7 +551,7 @@ class VideoGeneratorApp:
         delay_spin.bind('<FocusOut>', self.update_batch_delay)
         
         # Entrada de prompts
-        prompts_frame = ttk.LabelFrame(batch_main, text="Prompts (máximo 50)", padding="10")
+        prompts_frame = ttk.LabelFrame(batch_main, text=f"Prompts (máximo {config.MAX_PROMPTS_PER_BATCH})", padding="10")
         prompts_frame.pack(fill="both", expand=True, pady=(0, 10))
         
         # Área de texto para prompts
@@ -796,7 +808,7 @@ class VideoGeneratorApp:
                     webhook_data = {
                         "prompt": data.get("script", {}).get("input", ""),
                         "api_key": self.api_key_entry.get().strip(),
-                        "languages": [self.language_var.get()],
+                        "languages": [normalize_language(self.language_var.get())],
                         "auth_token": self.token_entry.get().strip()
                     }
                 else:
@@ -804,7 +816,7 @@ class VideoGeneratorApp:
                         "prompt": data.get("script", {}).get("input", ""),
                         "api_key": self.api_key_entry.get().strip(),
                         "token": self.token_entry.get().strip(),
-                        "languages": [self.language_var.get()],
+                        "languages": [normalize_language(self.language_var.get())],
                         "auth_token": self.token_entry.get().strip()
                     }
             
@@ -1307,7 +1319,7 @@ class VideoGeneratorApp:
                     pass
                 self.dispatch_pending_prompts()
         else:
-            messagebox.showwarning("Aviso", "Limite de 50 prompts atingido")
+            messagebox.showwarning("Aviso", f"Limite de {config.MAX_PROMPTS_PER_BATCH} prompts atingido")
     
     def update_prompts_tree(self):
         """Atualiza a visualização da lista de prompts"""
@@ -1695,7 +1707,7 @@ class VideoGeneratorApp:
                 webhook_data = {
                     "prompt": prompt_item.prompt_text,
                     "api_key": getattr(self, 'batch_api_key', self.api_key_entry.get().strip()),
-                    "languages": [prompt_item.language],
+                    "languages": [normalize_language(prompt_item.language)],
                     "auth_token": getattr(self, 'batch_token', self.token_entry.get().strip())
                 }
             else:
@@ -1703,7 +1715,7 @@ class VideoGeneratorApp:
                     "prompt": prompt_item.prompt_text,
                     "api_key": getattr(self, 'batch_api_key', self.api_key_entry.get().strip()),
                     "token": getattr(self, 'batch_token', self.token_entry.get().strip()),
-                    "languages": [prompt_item.language],
+                    "languages": [normalize_language(prompt_item.language)],
                     "auth_token": getattr(self, 'batch_token', self.token_entry.get().strip())
                 }
             

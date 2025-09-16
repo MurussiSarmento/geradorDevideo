@@ -38,8 +38,8 @@ GEMINI_WEBHOOK_URL = ""  # ex.: "https://seu-servidor.com/webhook/gemini-video"
 
 # Configurações de Arquivos
 BATCH_VIDEOS_FOLDER = "batch_videos"
-SUPPORTED_LANGUAGES = ["pt", "en", "es", "fr", "de", "it"]
-MAX_PROMPTS_PER_BATCH = 50
+SUPPORTED_LANGUAGES = ["pt", "🇺🇸", "es", "jp"]
+MAX_PROMPTS_PER_BATCH = 100
 
 # Headers HTTP padrão
 DEFAULT_HEADERS = {

@@ -13,6 +13,7 @@ from enum import Enum
 from typing import List, Dict, Optional, Callable, Any
 import uuid
 import os
+import config
 
 
 class PromptStatus(Enum):
@@ -79,9 +80,9 @@ class PromptManager:
         with self._lock:
             lines = [line.strip() for line in text.split(delimiter) if line.strip()]
             
-            # Verificar limite de 50 prompts
+            # Verificar limite máximo de prompts
             current_count = len(self.prompts)
-            available_slots = 50 - current_count
+            available_slots = config.MAX_PROMPTS_PER_BATCH - current_count
             
             if len(lines) > available_slots:
                 lines = lines[:available_slots]
@@ -111,7 +112,7 @@ class PromptManager:
             ID do prompt adicionado ou None se limite excedido
         """
         with self._lock:
-            if len(self.prompts) >= 50:
+            if len(self.prompts) >= config.MAX_PROMPTS_PER_BATCH:
                 return None
             
             prompt_item = PromptItem(
