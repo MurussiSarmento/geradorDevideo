@@ -538,6 +538,14 @@ class VideoGeneratorApp:
         delay_spin.grid(row=1, column=4, sticky=tk.W, pady=5)
         delay_spin.bind('<FocusOut>', self.update_batch_delay)
         
+        # Imagem de referência para 9:16 (aplicada a todos os prompts)
+        ttk.Label(config_frame, text="Imagem referência (9:16):").grid(row=2, column=0, sticky=tk.W, pady=5)
+        self.batch_ref_image_path = tk.StringVar(value="")
+        ref_entry = ttk.Entry(config_frame, textvariable=self.batch_ref_image_path, width=40, state="readonly")
+        ref_entry.grid(row=2, column=1, columnspan=3, sticky=tk.W, pady=5)
+        ttk.Button(config_frame, text="Selecionar...", command=self.select_batch_ref_image).grid(row=2, column=4, sticky=tk.W, pady=5)
+        ttk.Button(config_frame, text="Limpar", command=self.clear_batch_ref_image).grid(row=2, column=5, sticky=tk.W, pady=5)
+        
         # Entrada de prompts
         prompts_frame = ttk.LabelFrame(batch_main, text="Prompts (máximo 50)", padding="10")
         prompts_frame.pack(fill="both", expand=True, pady=(0, 10))
@@ -560,7 +568,7 @@ class VideoGeneratorApp:
         list_frame.pack(fill="both", expand=True, pady=(0, 10))
         
         # Treeview para mostrar prompts
-        columns = ("N", "ID", "Prompt", "Idioma", "Status", "URL")
+        columns = ("N", "ID", "Prompt", "Idioma", "Imagem", "Status", "URL")
         self.prompts_tree = ttk.Treeview(list_frame, columns=columns, show="headings", height=8)
         
         # Configurar colunas
@@ -568,13 +576,15 @@ class VideoGeneratorApp:
         self.prompts_tree.heading("ID", text="ID")
         self.prompts_tree.heading("Prompt", text="Prompt")
         self.prompts_tree.heading("Idioma", text="Idioma")
+        self.prompts_tree.heading("Imagem", text="Imagem")
         self.prompts_tree.heading("Status", text="Status")
         self.prompts_tree.heading("URL", text="URL do Vídeo")
         
         self.prompts_tree.column("N", width=40, anchor="center")
         self.prompts_tree.column("ID", width=80)
-        self.prompts_tree.column("Prompt", width=300)
+        self.prompts_tree.column("Prompt", width=260)
         self.prompts_tree.column("Idioma", width=80)
+        self.prompts_tree.column("Imagem", width=90, anchor="center")
         self.prompts_tree.column("Status", width=100)
         self.prompts_tree.column("URL", width=200)
         
@@ -601,6 +611,10 @@ class VideoGeneratorApp:
         self.tree_menu.add_command(label="Editar Prompt...", command=self.edit_selected_prompt)
         self.tree_menu.add_command(label="Tentar Novamente", command=self.retry_selected_prompt)
         self.tree_menu.add_command(label="Editar e Tentar Novamente...", command=self.edit_and_retry_selected_prompt)
+        # Ações para imagem do prompt
+        self.tree_menu.add_separator()
+        self.tree_menu.add_command(label="Definir Imagem do Prompt...", command=self.set_image_for_selected_prompt)
+        self.tree_menu.add_command(label="Limpar Imagem do Prompt", command=self.clear_image_for_selected_prompt)
         
         self.prompts_tree.bind("<Button-3>", self.show_tree_menu)
         
@@ -807,6 +821,31 @@ class VideoGeneratorApp:
                         "languages": [self.language_var.get()],
                         "auth_token": self.token_entry.get().strip()
                     }
+                    # Se houver imagem de referência configurada no lote, reutilizar também para 16:9 no modo individual
+                    ref_path = self.batch_ref_image_path.get() if hasattr(self, 'batch_ref_image_path') else ""
+                    if ref_path:
+                        try:
+                            with open(ref_path, 'rb') as f:
+                                b64_data = base64.b64encode(f.read()).decode('utf-8')
+                            ext = os.path.splitext(ref_path)[1].lower()
+                            if ext == '.png':
+                                mime = 'image/png'
+                            elif ext in ('.jpg', '.jpeg'):
+                                mime = 'image/jpeg'
+                            elif ext == '.webp':
+                                mime = 'image/webp'
+                            elif ext == '.bmp':
+                                mime = 'image/bmp'
+                            else:
+                                mime = 'application/octet-stream'
+                            webhook_data["images"] = [{
+                                "name": os.path.basename(ref_path),
+                                "type": mime,
+                                "data": b64_data
+                            }]
+                            self.log(f"🖼️ [{thread_name}] Incluindo imagem de referência no payload (individual 16:9)")
+                        except Exception as e:
+                            self.log(f"⚠️ [{thread_name}] Falha ao ler imagem de referência (individual 16:9): {e}", "WARNING")
             
             # Log detalhado da requisição
             self.log(f"📤 [{thread_name}] Preparando POST para webhook...")
@@ -1126,6 +1165,20 @@ class VideoGeneratorApp:
         except Exception as e:
             self.log(f"Erro ao atualizar delay: {e}", "ERROR")
     
+    def select_batch_ref_image(self):
+        path = filedialog.askopenfilename(title="Selecionar imagem de referência",
+                                          filetypes=[("Imagens", "*.png;*.jpg;*.jpeg;*.webp;*.bmp")])
+        if path:
+            self.batch_ref_image_path.set(path)
+            self.log(f"🖼️ Imagem de referência selecionada para lote: {path}")
+
+    def clear_batch_ref_image(self):
+        try:
+            self.batch_ref_image_path.set("")
+        except Exception:
+            self.batch_ref_image_path = tk.StringVar(value="")
+        self.log("🧹 Imagem de referência do lote limpa")
+    
     def on_aspect_change(self, *args):
         """Ajusta threads e delay automaticamente quando o formato é alterado"""
         try:
@@ -1325,11 +1378,18 @@ class VideoGeneratorApp:
             if prompt.video_url:
                 display_url = prompt.video_url[:30] + "..." if len(prompt.video_url) > 30 else prompt.video_url
             
+<<<<<<< Updated upstream
             self.prompts_tree.insert("", "end", values=(
+=======
+            # Indicador de imagem do prompt ("Sim" quando imagem própria definida)
+            image_marker = "Sim" if getattr(prompt, 'image_path', None) else "—"
+            self.prompts_tree.insert("", "end", iid=str(prompt.id), values=(
+>>>>>>> Stashed changes
                 idx,
                 prompt.id,
                 display_prompt,
                 prompt.language,
+                image_marker,
                 prompt.status.value,
                 display_url
             ))
@@ -1531,6 +1591,37 @@ class VideoGeneratorApp:
         
         self._open_edit_prompt_dialog(prompt, on_save, allow_retry=True)
 
+    def set_image_for_selected_prompt(self):
+        """Abre diálogo para escolher imagem e aplica ao prompt selecionado."""
+        prompt_id = self._get_selected_prompt_id()
+        if not prompt_id:
+            return
+        path = filedialog.askopenfilename(
+            title="Selecione a imagem do prompt",
+            filetypes=[
+                ("Imagens", "*.png;*.jpg;*.jpeg;*.webp;*.bmp"),
+                ("Todos", "*.*")
+            ]
+        )
+        if not path:
+            return
+        try:
+            self.prompt_manager.set_prompt_image(prompt_id, path)
+            self.schedule_tree_update()
+        except Exception as e:
+            messagebox.showerror("Erro", f"Falha ao definir imagem: {e}")
+
+    def clear_image_for_selected_prompt(self):
+        """Remove a imagem específica do prompt selecionado."""
+        prompt_id = self._get_selected_prompt_id()
+        if not prompt_id:
+            return
+        try:
+            self.prompt_manager.set_prompt_image(prompt_id, None)
+            self.schedule_tree_update()
+        except Exception as e:
+            messagebox.showerror("Erro", f"Falha ao limpar imagem: {e}")
+
     def _open_edit_prompt_dialog(self, prompt_item, on_save, allow_retry: bool):
         dialog = tk.Toplevel(self.root)
         dialog.title("Editar Prompt")
@@ -1560,6 +1651,18 @@ class VideoGeneratorApp:
             retry_check = ttk.Checkbutton(dialog, text="Tentar novamente após salvar", variable=retry_var)
             retry_check.pack(anchor="w", padx=10, pady=(8, 0))
         
+        # Seção: Imagem do Prompt (prioridade sobre referência)
+        img_frame = ttk.LabelFrame(dialog, text="Imagem do Prompt (prioridade sobre referência)")
+        img_frame.pack(fill="x", padx=10, pady=8)
+        img_var = tk.StringVar(value=getattr(prompt_item, 'image_path', '') or '')
+        img_row = ttk.Frame(img_frame)
+        img_row.pack(fill="x", padx=5, pady=5)
+        ttk.Label(img_row, text="Arquivo:").pack(side="left")
+        img_entry = ttk.Entry(img_row, textvariable=img_var)
+        img_entry.pack(side="left", fill="x", expand=True, padx=5)
+        ttk.Button(img_row, text="Escolher...", command=lambda: img_var.set(filedialog.askopenfilename(title="Selecione a imagem do prompt", filetypes=[("Imagens", "*.png;*.jpg;*.jpeg;*.webp;*.bmp"), ("Todos", "*.*")]) or img_var.get())).pack(side="left", padx=5)
+        ttk.Button(img_row, text="Limpar", command=lambda: img_var.set("")).pack(side="left")
+        
         # Buttons
         btns = ttk.Frame(dialog)
         btns.pack(fill="x", pady=10)
@@ -1572,6 +1675,12 @@ class VideoGeneratorApp:
                 return
             try:
                 on_save(new_text, new_lang, retry_var.get() if allow_retry else False)
+                # Persistir imagem do prompt no gerenciador
+                try:
+                    self.prompt_manager.set_prompt_image(prompt_item.id, img_var.get().strip() or None)
+                except Exception as e:
+                    print(f"Erro ao salvar imagem do prompt {prompt_item.id}: {e}")
+                self.schedule_tree_update()
                 dialog.destroy()
             except Exception as e:
                 messagebox.showerror("Erro", f"Falha ao salvar: {e}")
@@ -1698,6 +1807,35 @@ class VideoGeneratorApp:
                     "languages": [prompt_item.language],
                     "auth_token": getattr(self, 'batch_token', self.token_entry.get().strip())
                 }
+                # Selecionar imagem do prompt (prioridade) ou referência do lote
+                prompt_img = getattr(prompt_item, 'image_path', None)
+                chosen_path = prompt_img if (prompt_img and os.path.isfile(prompt_img)) else (self.batch_ref_image_path.get() if hasattr(self, 'batch_ref_image_path') else "")
+                if chosen_path:
+                    try:
+                        with open(chosen_path, 'rb') as f:
+                            b64_data = base64.b64encode(f.read()).decode('utf-8')
+                        ext = os.path.splitext(chosen_path)[1].lower()
+                        if ext == '.png':
+                            mime = 'image/png'
+                        elif ext in ('.jpg', '.jpeg'):
+                            mime = 'image/jpeg'
+                        elif ext == '.webp':
+                            mime = 'image/webp'
+                        elif ext == '.bmp':
+                            mime = 'image/bmp'
+                        else:
+                            mime = 'application/octet-stream'
+                        webhook_data["images"] = [{
+                            "name": os.path.basename(chosen_path),
+                            "type": mime,
+                            "data": b64_data
+                        }]
+                        if prompt_img and os.path.isfile(prompt_img):
+                            self.log(f"🖼️ [{thread_name}] Incluindo imagem do prompt no payload (9:16)")
+                        else:
+                            self.log(f"🖼️ [{thread_name}] Incluindo imagem de referência no payload (9:16)")
+                    except Exception as e:
+                        self.log(f"⚠️ [{thread_name}] Falha ao ler imagem: {e}", "WARNING")
             else:
                 webhook_data = {
                     "prompt": prompt_item.prompt_text,
@@ -1706,6 +1844,35 @@ class VideoGeneratorApp:
                     "languages": [prompt_item.language],
                     "auth_token": getattr(self, 'batch_token', self.token_entry.get().strip())
                 }
+                # Selecionar imagem do prompt (prioridade) ou referência do lote também para 16:9
+                prompt_img = getattr(prompt_item, 'image_path', None)
+                chosen_path = prompt_img if (prompt_img and os.path.isfile(prompt_img)) else (self.batch_ref_image_path.get() if hasattr(self, 'batch_ref_image_path') else "")
+                if chosen_path:
+                    try:
+                        with open(chosen_path, 'rb') as f:
+                            b64_data = base64.b64encode(f.read()).decode('utf-8')
+                        ext = os.path.splitext(chosen_path)[1].lower()
+                        if ext == '.png':
+                            mime = 'image/png'
+                        elif ext in ('.jpg', '.jpeg'):
+                            mime = 'image/jpeg'
+                        elif ext == '.webp':
+                            mime = 'image/webp'
+                        elif ext == '.bmp':
+                            mime = 'image/bmp'
+                        else:
+                            mime = 'application/octet-stream'
+                        webhook_data["images"] = [{
+                            "name": os.path.basename(chosen_path),
+                            "type": mime,
+                            "data": b64_data
+                        }]
+                        if prompt_img and os.path.isfile(prompt_img):
+                            self.log(f"🖼️ [{thread_name}] Incluindo imagem do prompt no payload (16:9)")
+                        else:
+                            self.log(f"🖼️ [{thread_name}] Incluindo imagem de referência no payload (16:9)")
+                    except Exception as e:
+                        self.log(f"⚠️ [{thread_name}] Falha ao ler imagem (16:9): {e}", "WARNING")
             
             # Fazer requisição com retry
             self.log(f"🚀 [{thread_name}] Enviando requisição para prompt {prompt_id}...")

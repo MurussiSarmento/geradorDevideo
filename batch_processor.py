@@ -13,6 +13,11 @@ from enum import Enum
 from typing import List, Dict, Optional, Callable, Any
 import uuid
 import os
+<<<<<<< Updated upstream
+=======
+import config
+import re
+>>>>>>> Stashed changes
 
 
 class PromptStatus(Enum):
@@ -37,6 +42,8 @@ class PromptItem:
     video_url: Optional[str] = None
     error_message: Optional[str] = None
     retry_count: int = 0
+    # Indica imagem específica do prompt (tem prioridade sobre a imagem de referência do lote)
+    image_path: Optional[str] = None
     
     def __post_init__(self):
         """Gera ID único se não fornecido"""
@@ -87,17 +94,129 @@ class PromptManager:
                 lines = lines[:available_slots]
             
             added_count = 0
-            for line in lines:
-                if line:  # Ignorar linhas vazias
+            for raw_line in lines:
+                if not raw_line:
+                    continue
+                image_path = None
+                line = raw_line
+                # Sintaxe opcional: "prompt | image=CAMINHO" (também aceita img= ou imagem=)
+                if '|' in raw_line:
+                    left, right = raw_line.split('|', 1)
+                    m = re.search(r"\b(image|img|imagem)\s*=\s*(.+)", right, flags=re.IGNORECASE)
+                    if m:
+                        image_path = m.group(2).strip()
+                        line = left.strip()
+                if line:
                     prompt_item = PromptItem(
                         id=str(uuid.uuid4())[:8],
                         prompt_text=line,
-                        language=language
+                        language=language,
+                        image_path=image_path or None
                     )
                     self.prompts.append(prompt_item)
                     added_count += 1
             
             return added_count
+<<<<<<< Updated upstream
+=======
+
+    def add_prompts_from_json_text(self, text: str, language: str = 'pt') -> int:
+        """Adiciona prompts a partir de objetos JSON no texto.
+        Aceita:
+        - Um único objeto JSON
+        - Uma lista JSON de objetos
+        - Múltiplos objetos JSON concatenados no texto (detecta por balanceamento de chaves)
+        """
+        with self._lock:
+            added_count = 0
+            objects: List[Dict[str, Any]] = []
+
+            # 1) Tentar carregar como JSON puro (objeto único ou lista)
+            try:
+                parsed = json.loads(text)
+                if isinstance(parsed, list):
+                    objects = [o for o in parsed if isinstance(o, dict)]
+                elif isinstance(parsed, dict):
+                    objects = [parsed]
+            except Exception:
+                objects = []
+
+            # 2) Se falhar, extrair múltiplos objetos por balanceamento de chaves
+            if not objects:
+                s = text
+                in_string = False
+                escape = False
+                brace = 0
+                start_idx = None
+                for i, ch in enumerate(s):
+                    if in_string:
+                        if escape:
+                            escape = False
+                        elif ch == '\\':
+                            escape = True
+                        elif ch == '"':
+                            in_string = False
+                        continue
+                    else:
+                        if ch == '"':
+                            in_string = True
+                            continue
+                        if ch == '{':
+                            if brace == 0:
+                                start_idx = i
+                            brace += 1
+                        elif ch == '}':
+                            if brace > 0:
+                                brace -= 1
+                                if brace == 0 and start_idx is not None:
+                                    obj_str = s[start_idx:i+1]
+                                    try:
+                                        obj = json.loads(obj_str)
+                                        if isinstance(obj, dict):
+                                            objects.append(obj)
+                                    except Exception:
+                                        pass
+                                    start_idx = None
+
+            # Respeitar limite
+            current_count = len(self.prompts)
+            available_slots = config.MAX_PROMPTS_PER_BATCH - current_count
+            if available_slots <= 0:
+                return 0
+            if len(objects) > available_slots:
+                objects = objects[:available_slots]
+
+            # Adicionar objetos, extraindo prompt e imagem quando disponíveis
+            for obj in objects:
+                # texto do prompt: aceita chaves usuais, senão mantém JSON minificado
+                prompt_text: Optional[str] = None
+                for key in ("prompt", "text", "texto"):
+                    val = obj.get(key)
+                    if isinstance(val, (str, int, float)):
+                        prompt_text = str(val)
+                        break
+                if prompt_text is None:
+                    prompt_text = json.dumps(obj, ensure_ascii=False)
+
+                # caminho da imagem: aceita várias chaves comuns
+                image_path: Optional[str] = None
+                for key in ("image", "image_path", "img", "imagem"):
+                    val = obj.get(key)
+                    if isinstance(val, str) and val.strip():
+                        image_path = val.strip()
+                        break
+
+                prompt_item = PromptItem(
+                    id=str(uuid.uuid4())[:8],
+                    prompt_text=prompt_text,
+                    language=language,
+                    image_path=image_path or None
+                )
+                self.prompts.append(prompt_item)
+                added_count += 1
+
+            return added_count
+>>>>>>> Stashed changes
     
     def add_single_prompt(self, prompt: str, language: str = 'pt') -> Optional[str]:
         """
@@ -160,6 +279,15 @@ class PromptManager:
                     return True
             return False
 
+    def set_prompt_image(self, prompt_id: str, image_path: Optional[str]) -> bool:
+        """Define ou remove a imagem específica de um prompt."""
+        with self._lock:
+            for p in self.prompts:
+                if p.id == prompt_id:
+                    p.image_path = image_path if image_path else None
+                    return True
+            return False
+    
     def reset_for_retry(self, prompt_id: str) -> bool:
         """Reseta campos do prompt para nova tentativa, preservando a numeração (posição)."""
         with self._lock:
