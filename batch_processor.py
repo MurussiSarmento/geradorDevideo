@@ -13,11 +13,8 @@ from enum import Enum
 from typing import List, Dict, Optional, Callable, Any
 import uuid
 import os
-<<<<<<< Updated upstream
-=======
 import config
 import re
->>>>>>> Stashed changes
 
 
 class PromptStatus(Enum):
@@ -117,8 +114,6 @@ class PromptManager:
                     added_count += 1
             
             return added_count
-<<<<<<< Updated upstream
-=======
 
     def add_prompts_from_json_text(self, text: str, language: str = 'pt') -> int:
         """Adiciona prompts a partir de objetos JSON no texto.
@@ -216,7 +211,6 @@ class PromptManager:
                 added_count += 1
 
             return added_count
->>>>>>> Stashed changes
     
     def add_single_prompt(self, prompt: str, language: str = 'pt') -> Optional[str]:
         """

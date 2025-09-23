@@ -538,6 +538,10 @@ class VideoGeneratorApp:
         delay_spin.grid(row=1, column=4, sticky=tk.W, pady=5)
         delay_spin.bind('<FocusOut>', self.update_batch_delay)
         
+        # Modo sequencial (força 1 thread)
+        self.sequential_mode_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(config_frame, text="Modo sequencial", variable=self.sequential_mode_var, command=self.on_toggle_sequential_mode).grid(row=1, column=5, sticky=tk.W, pady=5)
+        
         # Imagem de referência para 9:16 (aplicada a todos os prompts)
         ttk.Label(config_frame, text="Imagem referência (9:16):").grid(row=2, column=0, sticky=tk.W, pady=5)
         self.batch_ref_image_path = tk.StringVar(value="")
@@ -545,6 +549,14 @@ class VideoGeneratorApp:
         ref_entry.grid(row=2, column=1, columnspan=3, sticky=tk.W, pady=5)
         ttk.Button(config_frame, text="Selecionar...", command=self.select_batch_ref_image).grid(row=2, column=4, sticky=tk.W, pady=5)
         ttk.Button(config_frame, text="Limpar", command=self.clear_batch_ref_image).grid(row=2, column=5, sticky=tk.W, pady=5)
+        # Preview da imagem de referência
+        ttk.Label(config_frame, text="Prévia:").grid(row=2, column=6, sticky=tk.W, padx=(10, 5))
+        self.ref_preview_label = ttk.Label(config_frame, text="—")
+        self.ref_preview_label.grid(row=2, column=7, sticky=tk.W)
+        # Atualiza preview ao mudar o caminho
+        self.batch_ref_image_path.trace_add("write", self.on_ref_image_changed)
+        # Inicializa preview
+        self.update_ref_preview()
         
         # Entrada de prompts
         prompts_frame = ttk.LabelFrame(batch_main, text="Prompts (máximo 50)", padding="10")
@@ -614,9 +626,11 @@ class VideoGeneratorApp:
         # Ações para imagem do prompt
         self.tree_menu.add_separator()
         self.tree_menu.add_command(label="Definir Imagem do Prompt...", command=self.set_image_for_selected_prompt)
+        self.tree_menu.add_command(label="Abrir Imagem...", command=self.open_image_for_selected_prompt)
         self.tree_menu.add_command(label="Limpar Imagem do Prompt", command=self.clear_image_for_selected_prompt)
         
         self.prompts_tree.bind("<Button-3>", self.show_tree_menu)
+        self.prompts_tree.bind("<Double-1>", self.on_tree_double_click)
         
         # Controles de processamento
         process_frame = ttk.LabelFrame(batch_main, text="Processamento", padding="10")
@@ -1167,10 +1181,13 @@ class VideoGeneratorApp:
     
     def select_batch_ref_image(self):
         path = filedialog.askopenfilename(title="Selecionar imagem de referência",
-                                          filetypes=[("Imagens", "*.png;*.jpg;*.jpeg;*.webp;*.bmp")])
+                                          filetypes=[("Imagens", "*.png;*.jpg;*.jpeg;*.webp;*.bmp"), ("Todos", "*.*")])
         if path:
             self.batch_ref_image_path.set(path)
             self.log(f"🖼️ Imagem de referência selecionada para lote: {path}")
+            # Atualiza prévia e tabela
+            self.update_ref_preview()
+            self.schedule_tree_update()
 
     def clear_batch_ref_image(self):
         try:
@@ -1178,6 +1195,41 @@ class VideoGeneratorApp:
         except Exception:
             self.batch_ref_image_path = tk.StringVar(value="")
         self.log("🧹 Imagem de referência do lote limpa")
+        # Atualiza prévia e tabela
+        self.update_ref_preview()
+        self.schedule_tree_update()
+    
+    # --- Prévia da imagem de referência ---
+    def on_ref_image_changed(self, *args):
+        """Callback disparado quando o caminho da imagem de referência muda."""
+        try:
+            self.update_ref_preview()
+        finally:
+            try:
+                self.schedule_tree_update()
+            except Exception:
+                pass
+
+    def update_ref_preview(self):
+        """Atualiza o thumbnail da imagem de referência ao lado do campo do caminho."""
+        try:
+            if not hasattr(self, 'ref_preview_label'):
+                return
+            path = self.batch_ref_image_path.get() if hasattr(self, 'batch_ref_image_path') else ""
+            if not path or not os.path.isfile(path):
+                self.ref_preview_label.config(image="", text="—")
+                self._ref_preview_photo = None
+                return
+            img = Image.open(path)
+            img.thumbnail((64, 64), Image.LANCZOS)
+            photo = ImageTk.PhotoImage(img)
+            self._ref_preview_photo = photo
+            self.ref_preview_label.config(image=self._ref_preview_photo, text="")
+        except Exception as e:
+            self._ref_preview_photo = None
+            if hasattr(self, 'ref_preview_label'):
+                self.ref_preview_label.config(image="", text="(erro)")
+            self.log(f"⚠️ Falha ao carregar prévia da imagem de referência: {e}", "WARNING")
     
     def on_aspect_change(self, *args):
         """Ajusta threads e delay automaticamente quando o formato é alterado"""
@@ -1203,6 +1255,27 @@ class VideoGeneratorApp:
                 self.log(f"⚙️  Formato {value} selecionado: threads={config.DEFAULT_MAX_THREADS} e delay=0s aplicados")
         except Exception as e:
             self.log(f"⚠️ Erro ao aplicar defaults de formato: {e}", level="ERROR")
+    
+    def on_toggle_sequential_mode(self):
+        """Ativa/desativa o modo sequencial (força 1 thread)"""
+        try:
+            enabled = bool(self.sequential_mode_var.get()) if hasattr(self, 'sequential_mode_var') else False
+            self.sequential_mode = enabled
+            if enabled:
+                if hasattr(self, 'threads_var'):
+                    self.threads_var.set(1)
+                    self.update_thread_count()
+                self.log("🧩 Modo sequencial ativado (threads=1)")
+            else:
+                # Restaurar threads padrão se não estiver em 9:16, que já força 1
+                aspect = self.aspect_var.get() if hasattr(self, 'aspect_var') else '16:9'
+                if aspect != '9:16' and hasattr(self, 'threads_var'):
+                    default_threads = getattr(config, 'DEFAULT_MAX_THREADS', 2)
+                    self.threads_var.set(default_threads)
+                    self.update_thread_count()
+                self.log("🧩 Modo sequencial desativado")
+        except Exception as e:
+            self.log(f"⚠️ Erro ao alternar modo sequencial: {e}", "ERROR")
     
     def schedule_dispatcher(self):
         """Agenda loop leve para despachar prompts pendentes automaticamente durante o lote"""
@@ -1232,6 +1305,9 @@ class VideoGeneratorApp:
             return
         active = self.thread_pool.get_active_count()
         capacity = max(0, self.thread_pool.max_threads - active)
+        # Forçar capacidade 1 quando modo sequencial estiver ativo
+        if getattr(self, 'sequential_mode', False):
+            capacity = min(1, capacity)
         if capacity <= 0:
             return
         # Guardar janela de espera para delay pós-conclusão
@@ -1245,7 +1321,32 @@ class VideoGeneratorApp:
             if now < next_at:
                 # Aguardando janela de delay para despachar novamente
                 return
-        to_submit = pending[:capacity]
+        # STRICT SEQUENTIAL GUARD
+        if getattr(self, 'sequential_mode', False):
+            all_prompts = self.prompt_manager.get_all_prompts()
+            next_prompt = None
+            next_index = None
+            for i, p in enumerate(all_prompts):
+                if p.status == PromptStatus.PENDING:
+                    next_prompt = p
+                    next_index = i
+                    break
+            if next_prompt is None:
+                return
+            prior_prompts = all_prompts[:next_index]
+            if any(pr.status == PromptStatus.FAILED for pr in prior_prompts):
+                self.log("🛑 Modo sequencial: um prompt anterior falhou. Pausando até editar o prompt ou tentar novamente.", "ERROR")
+                try:
+                    self.pause_batch_processing()
+                except Exception:
+                    pass
+                return
+            if any(pr.status != PromptStatus.COMPLETED for pr in prior_prompts):
+                self.log("⏳ Modo sequencial: aguardando conclusão do prompt anterior antes de despachar o próximo.")
+                return
+            to_submit = [next_prompt]
+        else:
+            to_submit = pending[:capacity]
         if not to_submit:
             return
         self.log(f"🚚 Despachando {len(to_submit)} prompts pendentes (capacidade: {capacity}, ativas: {active})")
@@ -1346,7 +1447,10 @@ class VideoGeneratorApp:
             return
         
         language = self.batch_language_var.get()
-        added_count = self.prompt_manager.add_prompts_from_text(text, language)
+        # Tenta interpretar como JSON (suporta um ou vários objetos); se não adicionar nada, faz fallback para linhas
+        added_count = self.prompt_manager.add_prompts_from_json_text(text, language)
+        if added_count == 0:
+            added_count = self.prompt_manager.add_prompts_from_text(text, language)
         
         if added_count > 0:
             self.update_prompts_tree()
@@ -1378,13 +1482,11 @@ class VideoGeneratorApp:
             if prompt.video_url:
                 display_url = prompt.video_url[:30] + "..." if len(prompt.video_url) > 30 else prompt.video_url
             
-<<<<<<< Updated upstream
-            self.prompts_tree.insert("", "end", values=(
-=======
-            # Indicador de imagem do prompt ("Sim" quando imagem própria definida)
-            image_marker = "Sim" if getattr(prompt, 'image_path', None) else "—"
+            # Indicador de imagem: "Prompt" quando imagem própria definida, "Ref" quando usa imagem de referência do lote, "—" quando não há
+            has_prompt_image = bool(getattr(prompt, 'image_path', None))
+            has_ref_image = bool(hasattr(self, 'batch_ref_image_path') and self.batch_ref_image_path.get())
+            image_marker = "Prompt" if has_prompt_image else ("Ref" if has_ref_image else "—")
             self.prompts_tree.insert("", "end", iid=str(prompt.id), values=(
->>>>>>> Stashed changes
                 idx,
                 prompt.id,
                 display_prompt,
@@ -1468,6 +1570,61 @@ class VideoGeneratorApp:
                 return
         
         messagebox.showwarning("Aviso", "Nenhuma URL disponível para este prompt")
+
+    def on_tree_double_click(self, event):
+        """Abre a imagem quando o usuário dá duplo clique na coluna 'Imagem'."""
+        try:
+            col = self.prompts_tree.identify_column(event.x)
+            row = self.prompts_tree.identify_row(event.y)
+            # A coluna 'Imagem' é a quinta no array de colunas => '#5'
+            if col == '#5' and row:
+                values = self.prompts_tree.item(row)['values']
+                if values and len(values) >= 2:
+                    prompt_id = values[1]
+                    self.open_image_for_selected_prompt(prompt_id=prompt_id)
+        except Exception:
+            pass
+
+    def open_image_for_selected_prompt(self, prompt_id=None):
+        """Abre a imagem associada ao prompt (imagem própria ou referência do lote)."""
+        try:
+            if prompt_id is None:
+                prompt_id = self._get_selected_prompt_id()
+                if prompt_id is None:
+                    sel = self.prompts_tree.selection()
+                    if not sel:
+                        messagebox.showinfo("Imagem", "Selecione um prompt para abrir a imagem.")
+                        return
+                    prompt_id = sel[0]
+            # Buscar prompt localmente, pois get_prompt_by_id pode não existir
+            prompt_item = None
+            try:
+                for p in self.prompt_manager.get_all_prompts():
+                    if p.id == prompt_id:
+                        prompt_item = p
+                        break
+            except Exception:
+                prompt_item = None
+            img_path = None
+            if prompt_item and getattr(prompt_item, 'image_path', None):
+                img_path = prompt_item.image_path
+            elif hasattr(self, 'batch_ref_image_path') and self.batch_ref_image_path.get():
+                img_path = self.batch_ref_image_path.get()
+            if not img_path:
+                messagebox.showinfo("Imagem", "Nenhuma imagem associada ao prompt ou referência do lote.")
+                return
+            try:
+                if os.path.exists(img_path):
+                    try:
+                        os.startfile(img_path)
+                    except Exception:
+                        webbrowser.open(f"file:///{img_path.replace(chr(92), '/')}" )
+                else:
+                    webbrowser.open(img_path)
+            except Exception as e:
+                messagebox.showerror("Erro", f"Falha ao abrir imagem: {e}")
+        except Exception as e:
+            messagebox.showerror("Erro", f"Falha ao abrir imagem: {e}")
 
     # --- Novas ações: editar e reprocessar ---
     def _get_selected_prompt_id(self):
@@ -1662,6 +1819,50 @@ class VideoGeneratorApp:
         img_entry.pack(side="left", fill="x", expand=True, padx=5)
         ttk.Button(img_row, text="Escolher...", command=lambda: img_var.set(filedialog.askopenfilename(title="Selecione a imagem do prompt", filetypes=[("Imagens", "*.png;*.jpg;*.jpeg;*.webp;*.bmp"), ("Todos", "*.*")]) or img_var.get())).pack(side="left", padx=5)
         ttk.Button(img_row, text="Limpar", command=lambda: img_var.set("")).pack(side="left")
+        
+        def _open_current_image():
+            p = img_var.get().strip()
+            if not p:
+                messagebox.showinfo("Imagem", "Nenhuma imagem selecionada.")
+                return
+            try:
+                if os.path.exists(p):
+                    try:
+                        os.startfile(p)
+                    except Exception:
+                        webbrowser.open(f"file:///{p.replace(chr(92), '/')}" )
+                else:
+                    webbrowser.open(p)
+            except Exception as e:
+                messagebox.showerror("Erro", f"Falha ao abrir imagem: {e}")
+        ttk.Button(img_row, text="Abrir", command=_open_current_image).pack(side="left", padx=5)
+        
+        # Prévia/Link
+        img_preview = ttk.Label(img_frame, text="(sem prévia)")
+        img_preview.pack(anchor="w", padx=5, pady=(0,5))
+        link_lbl = tk.Label(img_frame, text="", fg="blue", cursor="hand2")
+        link_lbl.pack(anchor="w", padx=5, pady=(0,5))
+        
+        def _update_preview(*_):
+            path = img_var.get().strip()
+            if path:
+                try:
+                    im = Image.open(path)
+                    im.thumbnail((120, 120))
+                    photo = ImageTk.PhotoImage(im)
+                    img_preview.configure(image=photo, text="")
+                    dialog._img_preview_photo = photo
+                    name = os.path.basename(path)
+                    link_lbl.configure(text=f"Abrir: {name}")
+                    link_lbl.bind("<Button-1>", lambda e: _open_current_image())
+                except Exception as e:
+                    img_preview.configure(image="", text=f"(erro ao pré-visualizar: {e})")
+                    link_lbl.configure(text="")
+            else:
+                img_preview.configure(image="", text="(sem prévia)")
+                link_lbl.configure(text="")
+        img_var.trace_add("write", _update_preview)
+        _update_preview()
         
         # Buttons
         btns = ttk.Frame(dialog)
@@ -1874,11 +2075,12 @@ class VideoGeneratorApp:
                     except Exception as e:
                         self.log(f"⚠️ [{thread_name}] Falha ao ler imagem (16:9): {e}", "WARNING")
             
-            # Fazer requisição com retry
+            # Fazer requisição com retry (inclui retry para erros de parsing/formato)
             self.log(f"🚀 [{thread_name}] Enviando requisição para prompt {prompt_id}...")
             start_time = time.time()
             
             max_retries = getattr(self.batch_config, 'max_retries', config.CONNECTION_RETRIES)
+            last_error = None
             for attempt in range(max_retries + 1):
                 try:
                     if attempt > 0:
@@ -1908,15 +2110,84 @@ class VideoGeneratorApp:
                     processing_time = time.time() - start_time
                     status_code = response.status_code
                     if status_code in [200, 201]:
-                        self.log(f"⏱️ [{thread_name}] Prompt {prompt_id} processado em {processing_time:.2f}s")
-                        break
+                        # Processar resposta já nesta tentativa; se falhar, tentar novamente
+                        self.log(f"✅ [{thread_name}] Resposta HTTP OK para prompt {prompt_id} (tentativa {attempt + 1})")
+                        self.log(f"📊 [{thread_name}] Status: {response.status_code}, Content-Length: {len(response.content)}")
+                        self.log(f"📋 [{thread_name}] Headers: {dict(response.headers)}")
+                        try:
+                            response_text = response.text
+                            self.log(f"📄 [{thread_name}] Resposta (primeiros 200 chars): {response_text[:200]}...")
+                            # Verificar se é dados binários (vídeo)
+                            if any(ord(char) < 32 and char not in '\n\r\t' for char in response_text[:100]):
+                                self.log(f"🎬 [{thread_name}] Dados binários detectados para prompt {prompt_id}")
+                                video_path = self.save_batch_video(response, prompt_item.id)
+                                self.log(f"💾 [{thread_name}] Vídeo salvo: {video_path}")
+                                return {
+                                    'success': True,
+                                    'video_url': f"file:///{video_path.replace(chr(92), '/')}",
+                                    'processing_time': processing_time
+                                }
+                            else:
+                                self.log(f"📝 [{thread_name}] Processando resposta de texto para prompt {prompt_id}")
+                                try:
+                                    response_data = response.json()
+                                    video_url = response_data.get('video_url') or response_data.get('url') or response_data.get('link')
+                                    if video_url:
+                                        self.log(f"🎯 [{thread_name}] URL encontrada para prompt {prompt_id}: {video_url[:50]}...")
+                                        return {
+                                            'success': True,
+                                            'video_url': video_url,
+                                            'processing_time': processing_time
+                                        }
+                                    else:
+                                        last_error = 'URL do vídeo não encontrada na resposta'
+                                        self.log(f"❓ [{thread_name}] {last_error}", "WARNING")
+                                        if attempt < max_retries:
+                                            self.log(f"🔁 [{thread_name}] Reintentando devido a resposta sem URL (tentativa {attempt + 1}/{max_retries + 1})", "WARNING")
+                                            continue
+                                        return {
+                                            'success': False,
+                                            'error': last_error,
+                                            'processing_time': processing_time
+                                        }
+                                except json.JSONDecodeError:
+                                    self.log(f"🔍 [{thread_name}] Tentando interpretar como link direto para prompt {prompt_id}")
+                                    if response_text.startswith('http'):
+                                        self.log(f"🔗 [{thread_name}] Link direto encontrado para prompt {prompt_id}")
+                                        return {
+                                            'success': True,
+                                            'video_url': response_text.strip(),
+                                            'processing_time': processing_time
+                                        }
+                                    else:
+                                        last_error = 'Formato de resposta não reconhecido'
+                                        self.log(f"❌ [{thread_name}] {last_error} para prompt {prompt_id}", "ERROR")
+                                        if attempt < max_retries:
+                                            self.log(f"🔁 [{thread_name}] Reintentando devido a formato não reconhecido (tentativa {attempt + 1}/{max_retries + 1})", "WARNING")
+                                            continue
+                                        return {
+                                            'success': False,
+                                            'error': last_error,
+                                            'processing_time': processing_time
+                                        }
+                        except Exception as e:
+                            last_error = f'Erro ao processar resposta: {str(e)}'
+                            self.log(f"⚠️ [{thread_name}] {last_error}", "WARNING")
+                            if attempt < max_retries:
+                                self.log(f"🔁 [{thread_name}] Reintentando devido a erro ao processar resposta (tentativa {attempt + 1}/{max_retries + 1})", "WARNING")
+                                continue
+                            return {
+                                'success': False,
+                                'error': last_error,
+                                'processing_time': processing_time
+                            }
                     else:
                         # HTTP não-sucesso: decidir se é caso de retry
                         retryable = (status_code == 429) or (500 <= status_code < 600)
                         if retryable and attempt < max_retries:
                             self.log(f"⚠️ [{thread_name}] HTTP {status_code} na tentativa {attempt + 1}, reintentando...", "WARNING")
                             continue
-                        # Não retryable ou esgotou tentativas: sair do loop para tratamento padrão
+                        last_error = f'Erro HTTP {response.status_code}: {response.text[:200]}'
                         break
                     
                 except requests.exceptions.Timeout:
@@ -1932,81 +2203,16 @@ class VideoGeneratorApp:
                     else:
                         raise
             
-            if response.status_code in [200, 201]:
-                self.log(f"✅ [{thread_name}] Resposta bem-sucedida para prompt {prompt_id}")
-                self.log(f"📊 [{thread_name}] Status: {response.status_code}, Content-Length: {len(response.content)}")
-                self.log(f"📋 [{thread_name}] Headers: {dict(response.headers)}")
-                
-                # Processar resposta
-                try:
-                    response_text = response.text
-                    self.log(f"📄 [{thread_name}] Resposta (primeiros 200 chars): {response_text[:200]}...")
-                    
-                    # Verificar se é dados binários (vídeo)
-                    if any(ord(char) < 32 and char not in '\n\r\t' for char in response_text[:100]):
-                        self.log(f"🎬 [{thread_name}] Dados binários detectados para prompt {prompt_id}")
-                        # É um arquivo de vídeo - salvar
-                        video_path = self.save_batch_video(response, prompt_item.id)
-                        self.log(f"💾 [{thread_name}] Vídeo salvo: {video_path}")
-                        return {
-                            'success': True,
-                            'video_url': f"file:///{video_path.replace(chr(92), '/')}",
-                            'processing_time': processing_time
-                        }
-                    else:
-                        self.log(f"📝 [{thread_name}] Processando resposta de texto para prompt {prompt_id}")
-                        # Resposta é texto
-                        try:
-                            response_data = response.json()
-                            video_url = response_data.get('video_url') or response_data.get('url') or response_data.get('link')
-                            
-                            if video_url:
-                                self.log(f"🎯 [{thread_name}] URL encontrada para prompt {prompt_id}: {video_url[:50]}...")
-                                return {
-                                    'success': True,
-                                    'video_url': video_url,
-                                    'processing_time': processing_time
-                                }
-                            else:
-                                self.log(f"❓ [{thread_name}] URL não encontrada para prompt {prompt_id}", "WARNING")
-                                return {
-                                    'success': False,
-                                    'error': 'URL do vídeo não encontrada na resposta',
-                                    'processing_time': processing_time
-                                }
-                        except json.JSONDecodeError:
-                            self.log(f"🔍 [{thread_name}] Tentando interpretar como link direto para prompt {prompt_id}")
-                            # Pode ser um link direto
-                            if response_text.startswith('http'):
-                                self.log(f"🔗 [{thread_name}] Link direto encontrado para prompt {prompt_id}")
-                                return {
-                                    'success': True,
-                                    'video_url': response_text.strip(),
-                                    'processing_time': processing_time
-                                }
-                            else:
-                                self.log(f"❌ [{thread_name}] Formato não reconhecido para prompt {prompt_id}", "ERROR")
-                                return {
-                                    'success': False,
-                                    'error': 'Formato de resposta não reconhecido',
-                                    'processing_time': processing_time
-                                }
-                                
-                except Exception as e:
-                    return {
-                        'success': False,
-                        'error': f'Erro ao processar resposta: {str(e)}',
-                        'processing_time': processing_time
-                    }
-            else:
-                error_msg = f'Erro HTTP {response.status_code}: {response.text[:200]}'
-                self.log(f"❌ [{thread_name}] {error_msg}", "ERROR")
-                return {
-                    'success': False,
-                    'error': error_msg,
-                    'processing_time': processing_time
-                }
-                
+            # Se chegou aqui, não obteve sucesso após as tentativas
+            final_time = time.time() - start_time
+            error_msg = last_error or 'Falha desconhecida após tentativas'
+            self.log(f"❌ [{thread_name}] {error_msg}", "ERROR")
+            return {
+                'success': False,
+                'error': error_msg,
+                'processing_time': final_time
+            }
+            
         except Exception as e:
             error_msg = f'Erro na requisição: {str(e)}'
             self.log(f"❌ [{thread_name}] {error_msg}", "ERROR")
@@ -2040,6 +2246,54 @@ class VideoGeneratorApp:
         
         return file_path
     
+    def _extract_last_frame(self, video_path: str) -> str:
+        """Extrai o último frame de um vídeo MP4 e salva como JPG temporário.
+        Retorna o caminho do JPG ou string vazia em caso de falha.
+        """
+        try:
+            import imageio
+        except Exception:
+            imageio = None
+        try:
+            from moviepy.editor import VideoFileClip
+        except Exception:
+            VideoFileClip = None
+        try:
+            import tempfile, os
+            if not os.path.isfile(video_path):
+                return ""
+            tmp_dir = tempfile.gettempdir()
+            out_path = os.path.join(tmp_dir, f"last_frame_{os.path.basename(video_path)}.jpg")
+            if VideoFileClip is not None:
+                try:
+                    clip = VideoFileClip(video_path)
+                    t = max(0.0, clip.duration - 0.05)
+                    frame = clip.get_frame(t)
+                    from PIL import Image
+                    img = Image.fromarray(frame)
+                    img.save(out_path, format='JPEG', quality=90)
+                    clip.close()
+                    return out_path
+                except Exception:
+                    pass
+            if imageio is not None:
+                try:
+                    reader = imageio.get_reader(video_path)
+                    last = None
+                    for frame in reader:
+                        last = frame
+                    reader.close()
+                    if last is not None:
+                        from PIL import Image
+                        img = Image.fromarray(last)
+                        img.save(out_path, format='JPEG', quality=90)
+                        return out_path
+                except Exception:
+                    pass
+            return ""
+        except Exception:
+            return ""
+    
     def on_prompt_completed(self, prompt_id, result):
         """Callback chamado quando um prompt é concluído"""
         thread_name = threading.current_thread().name
@@ -2058,6 +2312,57 @@ class VideoGeneratorApp:
                 PromptStatus.COMPLETED,
                 result.get('processing_time', 0)
             )
+            # Encadeamento: se modo sequencial ativo, extrair último frame e usar como referência
+            try:
+                if getattr(self, 'sequential_mode', False):
+                    self.log(f"🧩 [{thread_name}] Modo sequencial ativo: preparando encadeamento de imagem de referência")
+                    video_url = result.get('video_url', '') or ''
+                    if video_url.startswith('file:///'):
+                        # Vídeo local salvo pelo app
+                        local_path = video_url.replace('file:///', '').replace('/', os.sep)
+                        if os.path.isfile(local_path):
+                            self.log(f"🎞️ [{thread_name}] Extraindo último frame do vídeo local: {os.path.basename(local_path)}")
+                            img_path = self._extract_last_frame(local_path)
+                            if img_path:
+                                if hasattr(self, 'batch_ref_image_path'):
+                                    self.batch_ref_image_path.set(img_path)
+                                    self.log(f"🔗 [{thread_name}] Referência atualizada (último frame local): {img_path}")
+                                self.next_allowed_dispatch_at = time.time() + max(0.0, float(getattr(self.batch_config, 'request_delay', 0.0)))
+                            else:
+                                self.log(f"⚠️ [{thread_name}] Não foi possível extrair último frame do arquivo local", "WARNING")
+                    elif video_url.startswith('http'):
+                        # Vídeo remoto: baixar temporariamente e extrair último frame
+                        try:
+                            import tempfile
+                            import requests
+                            self.log(f"⬇️ [{thread_name}] Baixando vídeo remoto para encadeamento...")
+                            tmp_dir = tempfile.gettempdir()
+                            tmp_path = os.path.join(tmp_dir, f"tmp_batch_{prompt_id}_{int(time.time())}.mp4")
+                            with requests.get(video_url, stream=True, timeout=max(10, int(getattr(config, 'REQUEST_TIMEOUT', 30)))) as r:
+                                r.raise_for_status()
+                                with open(tmp_path, 'wb') as f:
+                                    for chunk in r.iter_content(chunk_size=8192):
+                                        if chunk:
+                                            f.write(chunk)
+                            self.log(f"🎞️ [{thread_name}] Extraindo último frame do vídeo remoto baixado")
+                            img_path = self._extract_last_frame(tmp_path)
+                            try:
+                                os.remove(tmp_path)
+                            except Exception:
+                                pass
+                            if img_path:
+                                if hasattr(self, 'batch_ref_image_path'):
+                                    self.batch_ref_image_path.set(img_path)
+                                    self.log(f"🔗 [{thread_name}] Referência atualizada (último frame remoto): {img_path}")
+                                self.next_allowed_dispatch_at = time.time() + max(0.0, float(getattr(self.batch_config, 'request_delay', 0.0)))
+                            else:
+                                self.log(f"⚠️ [{thread_name}] Não foi possível extrair último frame do vídeo remoto", "WARNING")
+                        except Exception as de:
+                            self.log(f"⚠️ [{thread_name}] Falha ao baixar vídeo remoto para encadeamento: {de}", "WARNING")
+                    else:
+                        self.log(f"ℹ️ [{thread_name}] URL de vídeo não reconhecida para encadeamento: {video_url}")
+            except Exception as e:
+                self.log(f"⚠️ [{thread_name}] Falha no encadeamento de imagem de referência: {e}", "WARNING")
         else:
             self.log(f"❌ [{thread_name}] Prompt {prompt_id} falhou: {result.get('error', 'Erro desconhecido')}", "ERROR")
             self.prompt_manager.update_prompt_status(
@@ -2070,6 +2375,16 @@ class VideoGeneratorApp:
                 PromptStatus.FAILED,
                 result.get('processing_time', 0)
             )
+            # Pausar imediatamente em modo sequencial para evitar avanço de cenas
+            if getattr(self, 'sequential_mode', False):
+                self.log(f"🛑 [{thread_name}] Modo sequencial: falha detectada. Pausando o lote para que você edite o prompt ou tente novamente.", "ERROR")
+                try:
+                    self.root.after(0, self.pause_batch_processing)
+                except Exception:
+                    self.pause_batch_processing()
+                # Atualiza UI e encerra callback sem despachar mais
+                self.schedule_tree_update()
+                return
         
         # Atualizar interface na thread principal
         self.log(f"🔄 [{thread_name}] Agendando atualização da interface")
