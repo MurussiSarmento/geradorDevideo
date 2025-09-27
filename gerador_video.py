@@ -558,6 +558,28 @@ class VideoGeneratorApp:
         # Inicializa preview
         self.update_ref_preview()
         
+        # --- Módulo influencer (habilitado apenas com modo sequencial) ---
+        self.influencer_module_var = tk.BooleanVar(value=False)
+        self.influencer_module_check = ttk.Checkbutton(
+            config_frame, text="Módulo influencer", variable=self.influencer_module_var,
+            command=self.on_toggle_influencer_module
+        )
+        self.influencer_module_check.grid(row=3, column=0, sticky=tk.W, pady=5)
+        ttk.Label(config_frame, text="Foto da influencer:").grid(row=3, column=1, sticky=tk.W, pady=5)
+        self.influencer_image_path = tk.StringVar(value="")
+        self.influencer_entry = ttk.Entry(config_frame, textvariable=self.influencer_image_path, width=40, state="readonly")
+        self.influencer_entry.grid(row=3, column=2, columnspan=2, sticky=tk.W, pady=5)
+        self.influencer_select_btn = ttk.Button(config_frame, text="Selecionar...", command=self.select_influencer_image)
+        self.influencer_select_btn.grid(row=3, column=4, sticky=tk.W, pady=5)
+        self.influencer_clear_btn = ttk.Button(config_frame, text="Limpar", command=self.clear_influencer_image)
+        self.influencer_clear_btn.grid(row=3, column=5, sticky=tk.W, pady=5)
+        ttk.Label(config_frame, text="Prévia influencer:").grid(row=3, column=6, sticky=tk.W, padx=(10, 5))
+        self.influencer_preview_label = ttk.Label(config_frame, text="—")
+        self.influencer_preview_label.grid(row=3, column=7, sticky=tk.W)
+        self.influencer_image_path.trace_add("write", lambda *args: self.update_influencer_preview())
+        self.update_influencer_preview()
+        self.update_influencer_controls_state()
+        
         # Entrada de prompts
         prompts_frame = ttk.LabelFrame(batch_main, text="Prompts (máximo 50)", padding="10")
         prompts_frame.pack(fill="both", expand=True, pady=(0, 10))
@@ -1231,6 +1253,98 @@ class VideoGeneratorApp:
                 self.ref_preview_label.config(image="", text="(erro)")
             self.log(f"⚠️ Falha ao carregar prévia da imagem de referência: {e}", "WARNING")
     
+    # --- Módulo influencer: handlers e utilitários ---
+    def on_toggle_influencer_module(self):
+        """Ativa/desativa o módulo influencer (habilitado somente com modo sequencial)."""
+        try:
+            enabled = bool(self.influencer_module_var.get()) if hasattr(self, 'influencer_module_var') else False
+            self.log("👤 Módulo influencer " + ("ativado" if enabled else "desativado"))
+            self.update_influencer_controls_state()
+        except Exception as e:
+            self.log(f"⚠️ Erro ao alternar módulo influencer: {e}", "ERROR")
+
+    def select_influencer_image(self):
+        try:
+            if not hasattr(self, 'influencer_image_path'):
+                return
+            path = filedialog.askopenfilename(title="Selecionar foto da influencer",
+                                              filetypes=[("Imagens", "*.png;*.jpg;*.jpeg;*.webp;*.bmp"), ("Todos", "*.*")])
+            if path:
+                self.influencer_image_path.set(path)
+                self.log(f"📸 Foto da influencer selecionada: {path}")
+                self.update_influencer_preview()
+        except Exception as e:
+            self.log(f"⚠️ Erro ao selecionar foto da influencer: {e}", "ERROR")
+
+    def clear_influencer_image(self):
+        try:
+            if hasattr(self, 'influencer_image_path'):
+                self.influencer_image_path.set("")
+            self.update_influencer_preview()
+            self.log("🧹 Foto da influencer limpa")
+        except Exception as e:
+            self.log(f"⚠️ Erro ao limpar foto da influencer: {e}", "ERROR")
+
+    def update_influencer_preview(self):
+        """Atualiza o thumbnail da imagem da influencer ao lado do campo do caminho."""
+        try:
+            if not hasattr(self, 'influencer_preview_label') or not hasattr(self, 'influencer_image_path'):
+                return
+            path = self.influencer_image_path.get().strip()
+            if not path or not os.path.isfile(path):
+                self.influencer_preview_label.config(image="", text="—")
+                self._influencer_preview_photo = None
+                return
+            img = Image.open(path)
+            img.thumbnail((64, 64), Image.LANCZOS)
+            photo = ImageTk.PhotoImage(img)
+            self._influencer_preview_photo = photo
+            self.influencer_preview_label.config(image=self._influencer_preview_photo, text="")
+        except Exception as e:
+            self._influencer_preview_photo = None
+            if hasattr(self, 'influencer_preview_label'):
+                self.influencer_preview_label.config(image="", text="(erro)")
+            self.log(f"⚠️ Falha ao carregar prévia da influencer: {e}", "WARNING")
+
+    def update_influencer_controls_state(self):
+        """Habilita/desabilita os controles do módulo influencer conforme o modo sequencial e o checkbox."""
+        try:
+            sequential_enabled = bool(self.sequential_mode_var.get()) if hasattr(self, 'sequential_mode_var') else False
+            # O checkbox do módulo influencer só habilita se o modo sequencial estiver ativo
+            if hasattr(self, 'influencer_module_check'):
+                state = ("normal" if sequential_enabled else "disabled")
+                try:
+                    self.influencer_module_check.state(["!disabled"]) if sequential_enabled else self.influencer_module_check.state(["disabled"])
+                except Exception:
+                    # ttk.Checkbutton pode não aceitar .state em algumas versões, usar configure
+                    self.influencer_module_check.configure(state=state)
+                if not sequential_enabled and hasattr(self, 'influencer_module_var'):
+                    # Se desligou sequencial, também desliga o módulo influencer
+                    self.influencer_module_var.set(False)
+            influencer_on = sequential_enabled and hasattr(self, 'influencer_module_var') and bool(self.influencer_module_var.get())
+            # Controles dependentes da ativação do módulo
+            entry_state = "readonly" if influencer_on else "disabled"
+            btn_state = ("normal" if influencer_on else "disabled")
+            if hasattr(self, 'influencer_entry'):
+                try:
+                    self.influencer_entry.configure(state=entry_state)
+                except Exception:
+                    pass
+            if hasattr(self, 'influencer_select_btn'):
+                try:
+                    self.influencer_select_btn.configure(state=btn_state)
+                except Exception:
+                    pass
+            if hasattr(self, 'influencer_clear_btn'):
+                try:
+                    self.influencer_clear_btn.configure(state=btn_state)
+                except Exception:
+                    pass
+            # Atualiza a prévia para refletir possível limpeza/desativação
+            self.update_influencer_preview()
+        except Exception as e:
+            self.log(f"⚠️ Erro ao atualizar estado dos controles do influencer: {e}", "ERROR")
+
     def on_aspect_change(self, *args):
         """Ajusta threads e delay automaticamente quando o formato é alterado"""
         try:
@@ -1274,6 +1388,11 @@ class VideoGeneratorApp:
                     self.threads_var.set(default_threads)
                     self.update_thread_count()
                 self.log("🧩 Modo sequencial desativado")
+            # Atualiza estado dos controles do módulo influencer
+            try:
+                self.update_influencer_controls_state()
+            except Exception:
+                pass
         except Exception as e:
             self.log(f"⚠️ Erro ao alternar modo sequencial: {e}", "ERROR")
     
@@ -1633,9 +1752,10 @@ class VideoGeneratorApp:
             return None
         item = selection[0]
         values = self.prompts_tree.item(item)['values']
-        if not values:
-            return None
-        return values[1]
+        if values and len(values) > 1 and values[1]:
+            return values[1]
+        # Fallback: usa o iid do item (definido como o próprio prompt.id em update_prompts_tree)
+        return item
 
     def edit_selected_prompt(self):
         prompt_id = self._get_selected_prompt_id()
@@ -2245,6 +2365,36 @@ class VideoGeneratorApp:
             file.write(response.content)
         
         return file_path
+
+    def save_batch_video_from_url(self, video_url: str, prompt_id: str) -> str:
+        """Baixa um vídeo remoto (URL) e salva no diretório batch_videos com o mesmo padrão de nomenclatura.
+        Retorna o caminho salvo ou string vazia em caso de falha."""
+        try:
+            download_folder = "batch_videos"
+            if not os.path.exists(download_folder):
+                os.makedirs(download_folder)
+            try:
+                order_index = next((idx for idx, p in enumerate(self.prompt_manager.get_all_prompts(), start=1) if p.id == prompt_id), 0)
+            except Exception:
+                order_index = 0
+            base_name = f"video_{prompt_id}_{int(time.time())}.mp4"
+            filename = f"{order_index}_{base_name}" if order_index else base_name
+            file_path = os.path.join(download_folder, filename)
+
+            # Download com stream
+            resp = requests.get(video_url, stream=True, timeout=max(30, int(getattr(config, 'REQUEST_TIMEOUT', 60))))
+            resp.raise_for_status()
+            with open(file_path, 'wb') as f:
+                for chunk in resp.iter_content(chunk_size=8192):
+                    if chunk:
+                        f.write(chunk)
+            return file_path
+        except Exception as e:
+            try:
+                self.log(f"⚠️ Falha ao baixar vídeo de URL para salvar localmente: {e}", "WARNING")
+            except Exception:
+                pass
+            return ""
     
     def _extract_last_frame(self, video_path: str) -> str:
         """Extrai o último frame de um vídeo MP4 e salva como JPG temporário.
@@ -2294,6 +2444,47 @@ class VideoGeneratorApp:
         except Exception:
             return ""
     
+    def _maybe_generate_influencer_composite(self, last_frame_path: str, prompt_id: str):
+        """Gera uma imagem lado-a-lado (esquerda = último frame; direita = influencer) quando o módulo
+        influencer estiver habilitado. A saída será salva em batch_videos/combined/combined_<id>_<ts>.jpg"""
+        try:
+            if not getattr(self, 'sequential_mode', False):
+                return
+            if not hasattr(self, 'influencer_module_var') or not self.influencer_module_var.get():
+                return
+            right_path = self.influencer_image_path.get().strip() if hasattr(self, 'influencer_image_path') else ""
+            if not right_path or not os.path.isfile(right_path):
+                self.log("ℹ️ Módulo influencer ativo, mas nenhuma foto válida foi selecionada.")
+                return
+            if not last_frame_path or not os.path.isfile(last_frame_path):
+                return
+            # Carregar e alinhar alturas
+            left_img = Image.open(last_frame_path).convert('RGB')
+            right_img = Image.open(right_path).convert('RGB')
+            target_h = max(left_img.height, right_img.height)
+            def _resize_keep_aspect(img, target_h):
+                if img.height <= 0:
+                    return img
+                new_w = max(1, int(img.width * (target_h / img.height)))
+                return img.resize((new_w, target_h), Image.LANCZOS)
+            left_res = _resize_keep_aspect(left_img, target_h)
+            right_res = _resize_keep_aspect(right_img, target_h)
+            total_w = left_res.width + right_res.width
+            canvas = Image.new('RGB', (total_w, target_h), color=(0, 0, 0))
+            canvas.paste(left_res, (0, 0))
+            canvas.paste(right_res, (left_res.width, 0))
+            # Salvar
+            base_folder = getattr(config, 'BATCH_VIDEOS_FOLDER', 'batch_videos')
+            out_dir = os.path.join(base_folder, 'combined')
+            os.makedirs(out_dir, exist_ok=True)
+            ts = int(time.time())
+            out_path = os.path.join(out_dir, f"combined_{prompt_id}_{ts}.jpg")
+            canvas.save(out_path, format='JPEG', quality=92)
+            self.last_combined_image_path = out_path
+            self.log(f"🖼️ Imagem combinada criada: {out_path}")
+        except Exception as e:
+            self.log(f"⚠️ Falha ao gerar imagem combinada do módulo influencer: {e}", "WARNING")
+    
     def on_prompt_completed(self, prompt_id, result):
         """Callback chamado quando um prompt é concluído"""
         thread_name = threading.current_thread().name
@@ -2312,6 +2503,24 @@ class VideoGeneratorApp:
                 PromptStatus.COMPLETED,
                 result.get('processing_time', 0)
             )
+            # Auto-save: se retornou apenas URL remota, salvar localmente com o mesmo padrão do modo binário
+            try:
+                video_url = result.get('video_url', '') or ''
+                if video_url.startswith('http'):
+                    self.log(f"⬇️ [{thread_name}] Salvando automaticamente vídeo remoto do prompt {prompt_id}...")
+                    local_path = self.save_batch_video_from_url(video_url, prompt_id)
+                    local_url = f"file:///{local_path.replace(os.sep, '/')}"
+                    # Atualiza o prompt para apontar para o arquivo local
+                    self.prompt_manager.update_prompt_status(
+                        prompt_id,
+                        PromptStatus.COMPLETED,
+                        video_url=local_url
+                    )
+                    # Atualiza o resultado para que o restante do fluxo (encadeamento) use o arquivo local
+                    result['video_url'] = local_url
+                    self.log(f"💾 [{thread_name}] Vídeo salvo automaticamente em: {local_path}")
+            except Exception as e:
+                self.log(f"⚠️ [{thread_name}] Falha ao auto-salvar vídeo remoto: {e}", "WARNING")
             # Encadeamento: se modo sequencial ativo, extrair último frame e usar como referência
             try:
                 if getattr(self, 'sequential_mode', False):
@@ -2328,6 +2537,11 @@ class VideoGeneratorApp:
                                     self.batch_ref_image_path.set(img_path)
                                     self.log(f"🔗 [{thread_name}] Referência atualizada (último frame local): {img_path}")
                                 self.next_allowed_dispatch_at = time.time() + max(0.0, float(getattr(self.batch_config, 'request_delay', 0.0)))
+                                # Módulo influencer: gera imagem combinada
+                                try:
+                                    self._maybe_generate_influencer_composite(img_path, prompt_id)
+                                except Exception as _e:
+                                    self.log(f"⚠️ Erro ao gerar imagem combinada do influencer: {_e}", "WARNING")
                             else:
                                 self.log(f"⚠️ [{thread_name}] Não foi possível extrair último frame do arquivo local", "WARNING")
                     elif video_url.startswith('http'):
@@ -2355,6 +2569,11 @@ class VideoGeneratorApp:
                                     self.batch_ref_image_path.set(img_path)
                                     self.log(f"🔗 [{thread_name}] Referência atualizada (último frame remoto): {img_path}")
                                 self.next_allowed_dispatch_at = time.time() + max(0.0, float(getattr(self.batch_config, 'request_delay', 0.0)))
+                                # Módulo influencer: gera imagem combinada
+                                try:
+                                    self._maybe_generate_influencer_composite(img_path, prompt_id)
+                                except Exception as _e:
+                                    self.log(f"⚠️ Erro ao gerar imagem combinada do influencer: {_e}", "WARNING")
                             else:
                                 self.log(f"⚠️ [{thread_name}] Não foi possível extrair último frame do vídeo remoto", "WARNING")
                         except Exception as de:

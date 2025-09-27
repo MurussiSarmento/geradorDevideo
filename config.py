@@ -58,3 +58,14 @@ GEMINI_HEADERS = {
     "Content-Type": "application/json",
     "Accept": "application/json"
 }
+
+# Wan (DashScope) - Text-to-Image (URLs internacionais)
+# Endpoint para criação de tarefa de síntese de imagem
+WAN_IMAGE_CREATE_URL = "https://dashscope-intl.aliyuncs.com/api/v1/services/aigc/text2image/image-synthesis"
+# Endpoint para consulta de tarefa por task_id
+WAN_TASK_QUERY_URL = "https://dashscope-intl.aliyuncs.com/api/v1/tasks/{task_id}"
+# Headers base (os headers finais incluem Authorization: Bearer <API_KEY>)
+WAN_HEADERS_BASE = {
+    "Content-Type": "application/json",
+    "Accept": "application/json"
+}

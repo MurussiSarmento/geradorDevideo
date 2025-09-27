@@ -185,10 +185,17 @@ class PromptManager:
             for obj in objects:
                 # texto do prompt: aceita chaves usuais, senão mantém JSON minificado
                 prompt_text: Optional[str] = None
-                for key in ("prompt", "text", "texto"):
+                # Preferir campos de descrição quando presentes; 'text' costuma indicar texto sobreposto (ex.: 'none')
+                for key in ("prompt", "description", "descricao", "desc", "texto", "text"):
                     val = obj.get(key)
                     if isinstance(val, (str, int, float)):
-                        prompt_text = str(val)
+                        val_str = str(val).strip()
+                        if not val_str:
+                            continue
+                        # Evitar valores sentinela como 'none'/'null' para campos de texto sobreposto
+                        if key in ("text", "texto") and val_str.lower() in ("none", "null"):
+                            continue
+                        prompt_text = val_str
                         break
                 if prompt_text is None:
                     prompt_text = json.dumps(obj, ensure_ascii=False)
