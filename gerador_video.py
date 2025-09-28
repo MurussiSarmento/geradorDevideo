@@ -270,6 +270,15 @@ class VideoGeneratorApp:
                 "x-goog-api-key": api_key,
             }
             test_data = None
+        elif provider == "WAN":
+            if not api_key:
+                self.log("❌ API Key é necessária para testar a WAN (DashScope)", "ERROR")
+                messagebox.showerror("Erro", "Informe sua DashScope API Key para testar a conexão")
+                return
+            endpoint = config.WAN_TASK_QUERY_URL.format(task_id="nonexistent-task-id")
+            headers = dict(config.WAN_HEADERS_BASE)
+            headers["Authorization"] = f"Bearer {api_key}"
+            test_data = None
         else:
             # Veta (atual)
             if not api_key or not token:
@@ -293,6 +302,14 @@ class VideoGeneratorApp:
                 self.log("🚀 Enviando requisição de teste...")
                 if provider == "Gemini":
                     self.log("📐 Formato: N/A (Gemini)")
+                    self.log(f"🔗 Endpoint de teste: {endpoint}")
+                    response = requests.get(
+                        endpoint,
+                        headers=headers,
+                        timeout=config.REQUEST_TIMEOUT
+                    )
+                elif provider == "WAN":
+                    self.log("📐 Formato: N/A (WAN)")
                     self.log(f"🔗 Endpoint de teste: {endpoint}")
                     response = requests.get(
                         endpoint,
@@ -378,7 +395,7 @@ class VideoGeneratorApp:
         ttk.Label(main_frame, text="Provedor:").grid(row=0, column=0, sticky=tk.W, pady=5)
         self.provider_var = tk.StringVar(value="Veta")
         provider_combo = ttk.Combobox(main_frame, textvariable=self.provider_var, 
-                                    values=["Veta", "Gemini"], state="readonly")
+                                    values=["Veta", "Gemini", "WAN"], state="readonly")
         provider_combo.grid(row=0, column=1, sticky=tk.W, pady=5)
 
         # Links de ajuda ao lado do combobox quando apropriado
@@ -417,6 +434,17 @@ class VideoGeneratorApp:
                 link_gemini = ttk.Label(self.provider_links_frame, text="Gerar API do Gemini", foreground="blue", cursor="hand2")
                 link_gemini.bind("<Button-1>", lambda e: open_gemini_api())
                 link_gemini.grid(row=0, column=1)
+
+            # Link para obter API Key do WAN (apenas quando WAN estiver selecionado)
+            if current == "WAN":
+                def open_wan_api():
+                    try:
+                        webbrowser.open_new_tab("https://dashscope.console.aliyun.com/")
+                    except Exception:
+                        pass
+                link_wan = ttk.Label(self.provider_links_frame, text="Obter API Key do WAN", foreground="blue", cursor="hand2")
+                link_wan.bind("<Button-1>", lambda e: open_wan_api())
+                link_wan.grid(row=0, column=1)
 
         # Render inicial e bind de mudança
         render_provider_links()
@@ -701,6 +729,7 @@ class VideoGeneratorApp:
         api_key = self.api_key_entry.get().strip()
         token = self.token_entry.get().strip()
         prompt = self.prompt_text.get("1.0", tk.END).strip()
+        provider = self.provider_var.get() if hasattr(self, 'provider_var') else 'Veta'
         
         self.log(f"📝 Validando campos... Prompt: {len(prompt)} chars")
         
@@ -709,9 +738,10 @@ class VideoGeneratorApp:
             messagebox.showerror("Erro", "Por favor, insira a API Key")
             return
         
-        if not token:
-            self.log("❌ Token não fornecido", "ERROR")
-            messagebox.showerror("Erro", "Por favor, insira o Token")
+        # Token é obrigatório apenas para Veta
+        if provider == "Veta" and not token:
+            self.log("❌ Token não fornecido (obrigatório para Veta)", "ERROR")
+            messagebox.showerror("Erro", "Por favor, insira o Token (obrigatório para Veta)")
             return
         
         if not prompt:
@@ -836,6 +866,216 @@ class VideoGeneratorApp:
                         return
                     else:
                         self.update_status("Processando vídeo na Gemini API... (aguarde)")
+            elif provider == "WAN":
+                # Integração com Wan (DashScope) - criação de tarefa e polling
+                api_key = self.api_key_entry.get().strip()
+                if not api_key:
+                    self.log(f"⚠️ [{thread_name}] WAN API Key não informada", "WARNING")
+                    self.update_status("Informe sua WAN (DashScope) API Key para continuar")
+                    return
+                prompt_text = data.get("script", {}).get("input", "").strip()
+                if not prompt_text:
+                    self.update_status("Prompt vazio. Nada para enviar.")
+                    return
+
+                headers = dict(config.WAN_HEADERS_BASE)
+                headers["Authorization"] = f"Bearer {api_key}"
+
+                # Monta payload mínimo de T2V (sem imagem de referência local)
+                create_payload = {
+                    "model": config.WAN_DEFAULT_T2V_MODEL,
+                    "input": {
+                        "prompt": prompt_text
+                    }
+                }
+                # Dica: para acelerar/diagnosticar, você pode ativar parâmetros leves
+                # create_payload["parameters"] = {"size": "832*480", "duration": 5}
+
+                # Logs detalhados do modelo e parâmetros
+                self.log(f"🧩 [{thread_name}] WAN modelo: {create_payload.get('model')}")
+                self.log(f"📝 [{thread_name}] Prompt (chars): {len(prompt_text)}")
+                if 'parameters' in create_payload:
+                    self.log(f"⚙️ [{thread_name}] Parameters: {create_payload['parameters']}")
+                else:
+                    self.log(f"⚙️ [{thread_name}] Parameters: (não definidos; usando defaults do modelo)")
+
+                self.log(f"📤 [{thread_name}] Criando tarefa no WAN (video-synthesis)...")
+                self.log(f"🔗 URL: {config.WAN_VIDEO_CREATE_URL}")
+                self.log(f"📦 Payload size: {len(json.dumps(create_payload))} bytes")
+                start_time = time.time()
+                create_resp = requests.post(
+                    config.WAN_VIDEO_CREATE_URL,
+                    headers=headers,
+                    data=json.dumps(create_payload),
+                    timeout=config.REQUEST_TIMEOUT
+                )
+                elapsed = time.time() - start_time
+                self.log(f"⏱️ [{thread_name}] Criação da tarefa concluída em {elapsed:.2f}s")
+                if create_resp.status_code not in (200, 201, 202):
+                    self.log(f"❌ [{thread_name}] Erro ao criar tarefa WAN: {create_resp.status_code} - {create_resp.text[:300]}", "ERROR")
+                    self.update_status("Falha ao iniciar geração de vídeo na WAN (DashScope)")
+                    return
+
+                try:
+                    create_json = create_resp.json()
+                except Exception:
+                    create_json = {}
+                # Debug da resposta de criação
+                try:
+                    preview = create_resp.text[:300]
+                except Exception:
+                    preview = "<sem preview>"
+                self.log(f"🧪 [{thread_name}] Debug criação (preview): {preview}")
+                self.log(f"🧪 [{thread_name}] Keys criação topo: {list(create_json.keys())}")
+                out_create = (create_json.get("output") or {})
+                if isinstance(out_create, dict):
+                    self.log(f"🧪 [{thread_name}] Keys criação output: {list(out_create.keys())}")
+                task_id = (
+                    (create_json.get("output") or {}).get("task_id")
+                    or create_json.get("task_id")
+                    or create_json.get("id")
+                )
+                if not task_id:
+                    self.log(f"❓ [{thread_name}] Não foi possível obter task_id: {create_resp.text[:400]}", "WARNING")
+                    self.update_status("Tarefa iniciada mas task_id não encontrado")
+                    return
+
+                self.log(f"🆔 [{thread_name}] task_id: {task_id}")
+                poll_url = config.WAN_TASK_QUERY_URL.format(task_id=task_id)
+                self.log(f"🔎 [{thread_name}] Poll URL: {poll_url}")
+                self.update_status("Aguardando geração do vídeo (WAN)...")
+
+                # Controle de tempo e backoff para o polling
+                gen_start = time.time()
+                poll_interval = 8  # segundos
+                warned_timeout = False
+
+                # Polling até completar
+                while True:
+                    time.sleep(poll_interval)
+                    self.log(f"🔄 [{thread_name}] Polling tarefa WAN...")
+                    poll_resp = requests.get(poll_url, headers=headers, timeout=config.REQUEST_TIMEOUT)
+                    if poll_resp.status_code not in (200, 201):
+                        self.log(f"⚠️ [{thread_name}] Falha no polling: {poll_resp.status_code} - {poll_resp.text[:200]}", "WARNING")
+                        continue
+                    try:
+                        state = poll_resp.json()
+                    except Exception as pe:
+                        self.log(f"⚠️ [{thread_name}] Polling JSON inválido: {pe}", "WARNING")
+                        continue
+
+                    # Debug do polling
+                    try:
+                        poll_preview = poll_resp.text[:400]
+                    except Exception:
+                        poll_preview = "<sem preview>"
+                    self.log(f"🧪 [{thread_name}] Debug polling (preview): {poll_preview}")
+                    self.log(f"🧪 [{thread_name}] Keys polling topo: {list(state.keys())}")
+                    out = state.get("output") or {}
+                    if isinstance(out, dict):
+                        self.log(f"🧪 [{thread_name}] Keys polling output: {list(out.keys())}")
+                    code = state.get("code") or out.get("code")
+                    message = state.get("message") or out.get("message")
+                    if code or message:
+                        self.log(f"🧪 [{thread_name}] code={code} message={message}")
+
+                    # Logs de status/progresso para confirmar geração
+                    out = state.get("output") or {}
+                    raw_status = (
+                        out.get("status")
+                        or state.get("status")
+                        or out.get("task_status")
+                        or state.get("task_status")
+                        or out.get("phase")
+                        or state.get("phase")
+                    )
+                    progress = (
+                        out.get("progress")
+                        or out.get("percent")
+                        or out.get("progress_percent")
+                        or out.get("progress_in_percent")
+                        or out.get("task_progress")
+                        or out.get("stage")
+                    )
+                    self.log(f"📊 [{thread_name}] Status WAN: {raw_status}")
+                    if progress:
+                        self.log(f"⏳ [{thread_name}] Progresso WAN: {progress}")
+                    else:
+                        self.log(f"⏳ [{thread_name}] Progresso WAN: (não informado)")
+
+                    # Se nenhum status, exibir resumo do estado para diagnóstico
+                    if raw_status is None:
+                        try:
+                            compact = json.dumps(state)[:500]
+                        except Exception:
+                            compact = str(state)[:500]
+                        self.log(f"🧪 [{thread_name}] Status ausente, estado compacto: {compact}")
+
+                    # Timeout/backoff: alerta após THREAD_TIMEOUT e corte duro após WAN_MAX_WAIT_SECONDS (default 30 min)
+                    elapsed_total = time.time() - gen_start
+                    if (not warned_timeout) and elapsed_total > getattr(config, "THREAD_TIMEOUT", 600):
+                        self.log(f"⏰ [{thread_name}] 10+ minutos de processamento. Mantendo tarefa, mas ampliando intervalo de polling para 15s para reduzir carga.")
+                        warned_timeout = True
+                        poll_interval = 15
+                    if elapsed_total > getattr(config, "WAN_MAX_WAIT_SECONDS", 1800):
+                        self.log(f"🛑 [{thread_name}] Tempo máximo de espera atingido ({int(elapsed_total)}s). Interrompendo polling desta tarefa.", "ERROR")
+                        self.update_status("Tempo esgotado na geração (WAN). Tente novamente mais tarde ou ajuste parâmetros (ex.: size=832*480, duration=5s).")
+                        return
+
+                    # Tenta extrair status e url do vídeo de forma resiliente
+                    status = (
+                        (state.get("output") or {}).get("status")
+                        or state.get("status")
+                        or (state.get("output") or {}).get("task_status")
+                        or state.get("task_status")
+                        or (state.get("output") or {}).get("phase")
+                        or state.get("phase")
+                    )
+                    if status and str(status).lower() in ("succeeded", "success", "completed", "done", "finished"):
+                        # Buscar URL do vídeo
+                        video_url = None
+                        try:
+                            out = state.get("output") or {}
+                            video_url = (
+                                out.get("video_url") or out.get("url") or out.get("result_url")
+                                or out.get("video") or out.get("result")
+                            )
+                            if not isinstance(video_url, str):
+                                video_url = None
+                                def find_url(obj):
+                                    if isinstance(obj, str) and obj.startswith("http"):
+                                        return obj
+                                    if isinstance(obj, dict):
+                                        for v in obj.values():
+                                            u = find_url(v)
+                                            if u:
+                                                return u
+                                    if isinstance(obj, list):
+                                        for v in obj:
+                                            u = find_url(v)
+                                            if u:
+                                                return u
+                                    return None
+                                video_url = find_url(out)
+                        except Exception:
+                            video_url = None
+
+                        if not video_url:
+                            self.log(f"❓ [{thread_name}] Tarefa concluída, mas não encontrei URL do vídeo: {json.dumps(state)[:400]}", "WARNING")
+                            self.update_status("Geração concluída no WAN, mas URL do vídeo não encontrada")
+                            return
+
+                        self.log(f"🎯 [{thread_name}] URL do vídeo (WAN): {video_url}")
+                        self.video_url = video_url
+                        self.update_video_info(video_url)
+                        self.update_status("Vídeo gerado com sucesso (WAN)!")
+                        return
+                    elif status and str(status).lower() in ("failed", "error", "canceled"):
+                        self.log(f"❌ [{thread_name}] Tarefa falhou no WAN: {json.dumps(state)[:300]}", "ERROR")
+                        self.update_status("A geração falhou no WAN (DashScope)")
+                        return
+                    else:
+                        self.update_status("Processando vídeo no WAN (DashScope)... (aguarde)")
             else:
                 headers = dict(config.DEFAULT_HEADERS)
                 # Selecionar endpoint conforme formato 16:9 ou 9:16

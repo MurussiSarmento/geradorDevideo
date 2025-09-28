@@ -62,10 +62,15 @@ GEMINI_HEADERS = {
 # Wan (DashScope) - Text-to-Image (URLs internacionais)
 # Endpoint para criação de tarefa de síntese de imagem
 WAN_IMAGE_CREATE_URL = "https://dashscope-intl.aliyuncs.com/api/v1/services/aigc/text2image/image-synthesis"
+# Endpoint para video-synthesis (Text-to-Video / Image-to-Video)
+WAN_VIDEO_CREATE_URL = "https://dashscope-intl.aliyuncs.com/api/v1/services/aigc/video-generation/video-synthesis"
 # Endpoint para consulta de tarefa por task_id
 WAN_TASK_QUERY_URL = "https://dashscope-intl.aliyuncs.com/api/v1/tasks/{task_id}"
 # Headers base (os headers finais incluem Authorization: Bearer <API_KEY>)
 WAN_HEADERS_BASE = {
     "Content-Type": "application/json",
-    "Accept": "application/json"
+    "Accept": "application/json",
+    "X-DashScope-Async": "enable"
 }
+# Modelo padrão para Text-to-Video (região internacional/Singapura)
+WAN_DEFAULT_T2V_MODEL = "wan2.5-t2v-preview"
