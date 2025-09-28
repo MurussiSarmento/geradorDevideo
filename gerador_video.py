@@ -282,8 +282,8 @@ class VideoGeneratorApp:
         else:
             # Veta (atual)
             if not api_key or not token:
-                self.log("❌ API Key e Token são necessários para teste", "ERROR")
-                messagebox.showerror("Erro", "Preencha API Key e Token primeiro")
+                self.log("❌ [Veta] API Key e Token são necessários para teste", "ERROR")
+                messagebox.showerror("Erro", "Para Veta, preencha API Key e Token primeiro")
                 return
             use_reels = hasattr(self, 'aspect_var') and self.aspect_var.get() == '9:16'
             endpoint = config.REELS_WEBHOOK_URL if use_reels else config.WEBHOOK_URL
@@ -730,6 +730,8 @@ class VideoGeneratorApp:
         token = self.token_entry.get().strip()
         prompt = self.prompt_text.get("1.0", tk.END).strip()
         provider = self.provider_var.get() if hasattr(self, 'provider_var') else 'Veta'
+        provider_norm = (provider or 'Veta').strip()
+        self.log(f"🏷️ Provedor selecionado (individual): {provider_norm}")
         
         self.log(f"📝 Validando campos... Prompt: {len(prompt)} chars")
         
@@ -739,7 +741,7 @@ class VideoGeneratorApp:
             return
         
         # Token é obrigatório apenas para Veta
-        if provider == "Veta" and not token:
+        if provider_norm == "Veta" and not token:
             self.log("❌ Token não fornecido (obrigatório para Veta)", "ERROR")
             messagebox.showerror("Erro", "Por favor, insira o Token (obrigatório para Veta)")
             return
@@ -1089,6 +1091,31 @@ class VideoGeneratorApp:
                         "languages": [self.language_var.get()],
                         "auth_token": self.token_entry.get().strip()
                     }
+                    # Selecionar imagem de referência configurada no lote também para 9:16 no modo individual
+                    ref_path = self.batch_ref_image_path.get() if hasattr(self, 'batch_ref_image_path') else ""
+                    if ref_path:
+                        try:
+                            with open(ref_path, 'rb') as f:
+                                b64_data = base64.b64encode(f.read()).decode('utf-8')
+                            ext = os.path.splitext(ref_path)[1].lower()
+                            if ext == '.png':
+                                mime = 'image/png'
+                            elif ext in ('.jpg', '.jpeg'):
+                                mime = 'image/jpeg'
+                            elif ext == '.webp':
+                                mime = 'image/webp'
+                            elif ext == '.bmp':
+                                mime = 'image/bmp'
+                            else:
+                                mime = 'application/octet-stream'
+                            webhook_data["images"] = [{
+                                "name": os.path.basename(ref_path),
+                                "type": mime,
+                                "data": b64_data
+                            }]
+                            self.log(f"🖼️ [{thread_name}] Incluindo imagem de referência no payload (individual 9:16)")
+                        except Exception as e:
+                            self.log(f"⚠️ [{thread_name}] Falha ao ler imagem de referência (individual 9:16): {e}", "WARNING")
                 else:
                     webhook_data = {
                         "prompt": data.get("script", {}).get("input", ""),
@@ -1131,16 +1158,37 @@ class VideoGeneratorApp:
             if provider != "Gemini":
                 self.log(f"📐 [{thread_name}] Formato: {'9:16 (REELS)' if use_reels else '16:9'}")
             
-            # Fazer a requisição POST para o webhook
+            # Fazer a requisição POST para o webhook com retry
             self.log(f"🚀 [{thread_name}] Enviando requisição...")
             start_time = time.time()
             
-            response = requests.post(
-                endpoint,
-                headers=headers,
-                data=json.dumps(webhook_data),
-                timeout=config.REQUEST_TIMEOUT
-            )
+            max_attempts = getattr(config, 'CONNECTION_RETRIES', 3)
+            delay = getattr(config, 'RETRY_DELAY', 2.0)
+            response = None
+            for attempt in range(1, max_attempts + 1):
+                try:
+                    self.log(f"🔄 [{thread_name}] Tentativa {attempt}/{max_attempts} de POST para webhook (Veta)")
+                    response = requests.post(
+                        endpoint,
+                        headers=headers,
+                        data=json.dumps(webhook_data),
+                        timeout=config.REQUEST_TIMEOUT
+                    )
+                    if response.status_code >= 500:
+                        self.log(f"⚠️ [{thread_name}] Webhook retornou {response.status_code}. Nova tentativa em {delay}s...", "WARNING")
+                        if attempt < max_attempts:
+                            time.sleep(delay)
+                            continue
+                    break
+                except Exception as e:
+                    self.log(f"⚠️ [{thread_name}] Erro ao enviar requisição: {e}", "ERROR")
+                    if attempt < max_attempts:
+                        self.log(f"⏳ [{thread_name}] Aguardando {delay}s para retry...")
+                        time.sleep(delay)
+                    else:
+                        self.update_status("Falha ao contatar webhook após múltiplas tentativas")
+                        self.after_request_complete()
+                        return
             
             request_time = time.time() - start_time
             self.log(f"⏱️ [{thread_name}] Requisição completada em {request_time:.2f}s")
@@ -2257,10 +2305,31 @@ class VideoGeneratorApp:
         api_key = self.api_key_entry.get().strip()
         token = self.token_entry.get().strip()
         
+        provider = self.provider_var.get() if hasattr(self, 'provider_var') else 'Veta'
+        self.log(f"🏷️ Provedor selecionado (lote): {provider}")
         self.log("🔐 Validando credenciais...")
-        if not api_key or not token:
-            self.log("❌ Credenciais não fornecidas", "ERROR")
-            messagebox.showerror("Erro", "API Key e Token são obrigatórios")
+        if provider == "Veta":
+            if not api_key or not token:
+                self.log("❌ Credenciais Veta não fornecidas", "ERROR")
+                messagebox.showerror("Erro", "[Veta] API Key e Token são obrigatórios (WAN/Gemini usam apenas API Key)")
+                return
+        elif provider == "WAN":
+            if not api_key:
+                self.log("❌ API Key WAN não fornecida", "ERROR")
+                messagebox.showerror("Erro", "Informe sua WAN (DashScope) API Key para continuar")
+                return
+            # Lote indisponível para WAN nesta versão
+            self.log("⚠️ Lote não disponível para WAN. Use o modo individual.", "WARNING")
+            messagebox.showwarning("Aviso", "O processamento em lote está disponível apenas para Veta por enquanto. Selecione Veta para usar o lote, ou use o modo individual com WAN.")
+            return
+        elif provider == "Gemini":
+            if not api_key:
+                self.log("❌ API Key Gemini não fornecida", "ERROR")
+                messagebox.showerror("Erro", "Informe sua Gemini API Key para continuar")
+                return
+            # Lote indisponível para Gemini nesta versão
+            self.log("⚠️ Lote não disponível para Gemini. Use o modo individual.", "WARNING")
+            messagebox.showwarning("Aviso", "O processamento em lote está disponível apenas para Veta por enquanto. Selecione Veta para usar o lote, ou use o modo individual com Gemini.")
             return
         
         # Verificar se há prompts pendentes
